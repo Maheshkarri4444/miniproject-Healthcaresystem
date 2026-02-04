@@ -21,6 +21,7 @@
     "hardhat": "^2.22.6"
   },
   "dependencies": {
-    "ipfs-http-client": "^60.0.1"
+    "eciesjs": "^0.4.17",
+    "kubo-rpc-client": "^6.1.0"
   }
 }

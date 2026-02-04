@@ -1,0 +1,30 @@
+{
+  "doctor": {
+    "name": "Dr. John Doe",
+    "specialization": "Cardiology",
+    "licenseId": "DOC-ETH-001"
+  },
+  "patients": [
+    {
+      "patientId": "P001",
+      "name": "Alice",
+      "age": 45,
+      "diagnosis": "Hypertension",
+      "prescription": "Amlodipine"
+    },
+    {
+      "patientId": "P002",
+      "name": "Bob",
+      "age": 50,
+      "diagnosis": "Diabetes",
+      "prescription": "Metformin"
+    },
+    {
+      "patientId": "P003",
+      "name": "Charlie",
+      "age": 30,
+      "diagnosis": "Asthma",
+      "prescription": "Salbutamol"
+    }
+  ]
+}
