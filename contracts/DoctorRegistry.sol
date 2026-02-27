@@ -7,7 +7,7 @@ contract DoctorRegistry {
     struct Doctor {
         bool isRegistered;
         bool isVerified;
-        string certificateIPFSHash;
+        string[] certificateIPFSHashes;
     }
 
     mapping(address => Doctor) public doctors;
@@ -21,14 +21,20 @@ contract DoctorRegistry {
         admin = msg.sender;
     }
 
-    function registerDoctor(string calldata _ipfsHash) external {
+    function registerDoctor(string[] calldata _ipfsHashes) external {
         require(!doctors[msg.sender].isRegistered, "Already registered");
 
         doctors[msg.sender] = Doctor({
             isRegistered: true,
             isVerified: false,
-            certificateIPFSHash: _ipfsHash
+            certificateIPFSHashes: _ipfsHashes
         });
+    }
+
+    function getDoctorCertificates(
+        address _doctor
+    ) external view returns (string[] memory) {
+        return doctors[_doctor].certificateIPFSHashes;
     }
 
     function verifyDoctor(address _doctor) external onlyAdmin {

@@ -3,7 +3,10 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
+import "./DoctorRegistry.sol";
+
 contract MedicalAccessNFT is ERC721 {
+    DoctorRegistry public doctorRegistry;
     uint256 public tokenCounter;
     address public admin;
 
@@ -25,8 +28,9 @@ contract MedicalAccessNFT is ERC721 {
         _;
     }
 
-    constructor() ERC721("MedicalAccessNFT", "MEDNFT") {
+    constructor(address _registry) ERC721("MedicalAccessNFT", "MEDNFT") {
         admin = msg.sender;
+        doctorRegistry = DoctorRegistry(_registry);
         tokenCounter = 0;
     }
 
@@ -36,6 +40,10 @@ contract MedicalAccessNFT is ERC721 {
         string calldata _ipfsHash,
         bytes calldata _encryptedAESKey
     ) external returns (uint256) {
+        require(
+            doctorRegistry.isDoctorVerified(_doctor),
+            "Doctor not verified"
+        );
         tokenCounter++;
         uint256 tokenId = tokenCounter;
 
