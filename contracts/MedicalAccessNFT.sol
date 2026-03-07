@@ -14,7 +14,7 @@ contract MedicalAccessNFT is ERC721 {
         address patient;
         address doctor;
         string ipfsHash;
-        bytes encryptedAESKey;
+        
         bool revoked;
     }
 
@@ -37,8 +37,7 @@ contract MedicalAccessNFT is ERC721 {
     function mintAccessNFT(
         address _patient,
         address _doctor,
-        string calldata _ipfsHash,
-        bytes calldata _encryptedAESKey
+        string calldata _ipfsHash
     ) external returns (uint256) {
         require(
             doctorRegistry.isDoctorVerified(_doctor),
@@ -53,7 +52,6 @@ contract MedicalAccessNFT is ERC721 {
             patient: _patient,
             doctor: _doctor,
             ipfsHash: _ipfsHash,
-            encryptedAESKey: _encryptedAESKey,
             revoked: false
         });
 
@@ -69,6 +67,7 @@ contract MedicalAccessNFT is ERC721 {
     function getAccessData(
         uint256 tokenId,
         address caller
+       
     ) external view returns (AccessData memory) {
         require(ownerOf(tokenId) == caller, "Not NFT owner");
         require(!accessData[tokenId].revoked, "Access revoked");

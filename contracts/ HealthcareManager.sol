@@ -8,7 +8,7 @@ contract HealthcareManager {
     DoctorRegistry public doctorRegistry;
     MedicalAccessNFT public nft;
 
-    event RecordRequested(address doctor, address patient);
+    event RecordRequested(address doctor, address patient,uint256 tokenId);
     event RecordAccessed(address doctor, address patient, uint256 tokenId);
 
     constructor(address _doctorRegistry, address _nft) {
@@ -16,14 +16,15 @@ contract HealthcareManager {
         nft = MedicalAccessNFT(_nft);
     }
 
-    function requestRecord(address _patient) external {
-        emit RecordRequested(msg.sender, _patient);
+    function requestRecord(address _patient,uint256 tokenId) external {
+        emit RecordRequested(msg.sender, _patient, tokenId);
     }
 
     function accessRecord(uint256 tokenId) external {
         MedicalAccessNFT.AccessData memory data = nft.getAccessData(
             tokenId,
             msg.sender
+            
         );
 
         require(data.doctor == msg.sender, "Not authorized doctor");
