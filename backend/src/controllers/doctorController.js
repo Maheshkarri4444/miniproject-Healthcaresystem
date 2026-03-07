@@ -13,6 +13,7 @@ const getAdminContract = () => {
 exports.createDoctor = async (req, res) => {
   try {
     const doctor = await Doctor.create(req.body);
+    // console.log("body: ",doctor);
     res.status(201).json(doctor);
   } catch (err) {
     res.status(400).json({ error: err.message });

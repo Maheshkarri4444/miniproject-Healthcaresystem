@@ -7,6 +7,7 @@ const connectDB = require("./config/db");
 const userRoutes = require("./routes/userRoutes");
 const doctorRoutes = require("./routes/doctorRoutes");
 const ipfsRoutes = require("./routes/ipfsRoutes");
+const medicalRoutes = require("./routes/medicalRecords");
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use(express.json());
 app.use("/api/users", userRoutes);
 app.use("/api/doctors", doctorRoutes);
 app.use("/api/ipfs",ipfsRoutes)
+app.use("/api/records", medicalRoutes);
 
 const PORT = process.env.PORT || 5010;
 

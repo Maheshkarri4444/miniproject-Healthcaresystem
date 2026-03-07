@@ -1,9 +1,11 @@
 import { ethers } from "ethers";
 import DoctorRegistryABI from "../abi/DoctorRegistryABI.json";
+import MedicalRecordABI from "../abi/MedicalAccessNFT.json";
 import { getBytes, hexlify, keccak256 } from "ethers";
 
 
 const CONTRACT_ADDRESS = import.meta.env.VITE_DOCTOR_CONTRACT;
+const MEDICAL_CONTRACT_ADDRESS = import.meta.env.VITE_MEDICAL_CONTRACT;
 const SEPOLIA_CHAIN_ID = "0xaa36a7"; // 11155111 in hex
 
 export const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase();
@@ -64,6 +66,14 @@ export const getContract = async () => {
   const signer = await provider.getSigner();
 
   return new ethers.Contract(CONTRACT_ADDRESS, DoctorRegistryABI, signer);
+};
+
+export const getMedicalContract = async () => {
+  await checkAndSwitchToSepolia();
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  const signer = await provider.getSigner();
+
+  return new ethers.Contract(MEDICAL_CONTRACT_ADDRESS, MedicalRecordABI, signer);
 };
 
 export async function connectWalletWithPubKey() {
@@ -135,10 +145,20 @@ export async function getAdminDecryptionKey() {
 }
 
 export async function isDoctorVerified(address) {
-  const contract = await getContract(true);
-  return contract.isDoctorVerified(address);
-}
+  try {
+    const contract = await getContract(true);
+    console.log("contract:", contract);
+    console.log("checking doctor:", address);
 
+    const result = await contract.isDoctorVerified(address);
+
+    console.log("is doctor verified:", result);
+    return result;
+  } catch (err) {
+    console.error("isDoctorVerified error:", err);
+    return false;
+  }
+}
 export async function getDoctorCertificates(address) {
   const contract = await getContract(true);
   return contract.getDoctorCertificates(address);

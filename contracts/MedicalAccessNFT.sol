@@ -14,7 +14,6 @@ contract MedicalAccessNFT is ERC721 {
         address patient;
         address doctor;
         string ipfsHash;
-        
         bool revoked;
     }
 
@@ -25,6 +24,16 @@ contract MedicalAccessNFT is ERC721 {
             msg.sender == admin || msg.sender == accessData[tokenId].patient,
             "Not authorized"
         );
+        _;
+    }
+
+    modifier onlyDoctorOrAdmin(address doctor) {
+        require(msg.sender == doctor || msg.sender == admin, "Not authorized");
+        _;
+    }
+
+    modifier onlyPatientOrAdmin(address patient) {
+        require(msg.sender == patient || msg.sender == admin, "Not authorized");
         _;
     }
 
@@ -58,6 +67,22 @@ contract MedicalAccessNFT is ERC721 {
         return tokenId;
     }
 
+    function justStore(string calldata _ipfsHash) external returns (uint256) {
+        tokenCounter++;
+        uint256 tokenId = tokenCounter;
+
+        _mint(msg.sender, tokenId);
+
+        accessData[tokenId] = AccessData({
+            patient: msg.sender,
+            doctor: address(0),
+            ipfsHash: _ipfsHash,
+            revoked: false
+        });
+
+        return tokenId;
+    }
+
     function revokeAccess(
         uint256 tokenId
     ) external onlyAdminOrPatient(tokenId) {
@@ -67,10 +92,69 @@ contract MedicalAccessNFT is ERC721 {
     function getAccessData(
         uint256 tokenId,
         address caller
-       
     ) external view returns (AccessData memory) {
         require(ownerOf(tokenId) == caller, "Not NFT owner");
         require(!accessData[tokenId].revoked, "Access revoked");
         return accessData[tokenId];
+    }
+
+    function getAccessDataByDoctor(
+        address doctor
+    ) external view onlyDoctorOrAdmin(doctor) returns (AccessData[] memory) {
+        uint256 count = 0;
+
+        for (uint256 i = 1; i <= tokenCounter; i++) {
+            if (accessData[i].doctor == doctor && !accessData[i].revoked) {
+                count++;
+            }
+        }
+
+        AccessData[] memory results = new AccessData[](count);
+        uint256 index = 0;
+
+        for (uint256 i = 1; i <= tokenCounter; i++) {
+            if (accessData[i].doctor == doctor && !accessData[i].revoked) {
+                results[index] = accessData[i];
+                index++;
+            }
+        }
+
+        return results;
+    }
+
+    function getAccessDataByPatient(
+        address patient
+    ) external view onlyPatientOrAdmin(patient) returns (AccessData[] memory) {
+        uint256 count = 0;
+
+        // count records
+        for (uint256 i = 1; i <= tokenCounter; i++) {
+            if (accessData[i].patient == patient && !accessData[i].revoked) {
+                count++;
+            }
+        }
+
+        AccessData[] memory results = new AccessData[](count);
+        uint256 index = 0;
+
+        // collect records
+        for (uint256 i = 1; i <= tokenCounter; i++) {
+            if (accessData[i].patient == patient && !accessData[i].revoked) {
+                results[index] = accessData[i];
+                index++;
+            }
+        }
+
+        return results;
+    }
+
+    function revokeAllForDoctor(address doctor) external {
+        require(msg.sender == admin, "Only admin");
+
+        for (uint256 i = 1; i <= tokenCounter; i++) {
+            if (accessData[i].doctor == doctor) {
+                accessData[i].revoked = true;
+            }
+        }
     }
 }
