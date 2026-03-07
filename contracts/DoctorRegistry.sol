@@ -10,7 +10,15 @@ contract DoctorRegistry {
         string[] certificateIPFSHashes;
     }
 
+    struct DoctorInfo {
+        address doctorAddress;
+        bool isVerified;
+    }
+
     mapping(address => Doctor) public doctors;
+
+    // Array to store all registered doctor addresses
+    address[] public doctorList;
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "Only admin");
@@ -29,6 +37,8 @@ contract DoctorRegistry {
             isVerified: false,
             certificateIPFSHashes: _ipfsHashes
         });
+
+        doctorList.push(msg.sender);
     }
 
     function getDoctorCertificates(
@@ -44,5 +54,27 @@ contract DoctorRegistry {
 
     function isDoctorVerified(address _doctor) external view returns (bool) {
         return doctors[_doctor].isVerified;
+    }
+
+    // Function to return all doctors with verification status
+    function getAllDoctors() external view returns (DoctorInfo[] memory) {
+        uint256 length = doctorList.length;
+        DoctorInfo[] memory doctorInfos = new DoctorInfo[](length);
+
+        for (uint256 i = 0; i < length; i++) {
+            address doctorAddr = doctorList[i];
+
+            doctorInfos[i] = DoctorInfo({
+                doctorAddress: doctorAddr,
+                isVerified: doctors[doctorAddr].isVerified
+            });
+        }
+
+        return doctorInfos;
+    }
+
+    // Optional helper function to get total number of doctors
+    function getDoctorCount() external view returns (uint256) {
+        return doctorList.length;
     }
 }
