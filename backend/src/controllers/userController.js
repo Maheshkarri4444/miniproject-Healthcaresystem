@@ -2,10 +2,11 @@ const User = require("../models/User");
 
 const createUser = async (req, res) => {
   try {
-    const { walletAddress, pubkey, name, phoneNumber, email } = req.body;
+    const { walletAddress, pubkey, derivedpubkey, name, phoneNumber, email } = req.body;
     const user = new User({
       walletAddress: walletAddress.toLowerCase(),
       pubkey,
+      derivedpubkey,
       name,
       phoneNumber,
       email,

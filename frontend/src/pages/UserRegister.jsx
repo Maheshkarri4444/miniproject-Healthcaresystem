@@ -1,8 +1,29 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { connectWalletWithPubKey } from "../utils/contract";
+import { PrivateKey } from "eciesjs";
+import { keccak256, getBytes, hexlify } from "ethers";
 
 const API = "http://localhost:5010/api";
+
+/* SAME typed data used in GenerateAdminKeys */
+const TYPED_DATA = {
+  domain: {
+    name: "HealthChain",
+    version: "1",
+  },
+  types: {
+    AdminKey: [
+      { name: "purpose", type: "string" },
+      { name: "version", type: "string" },
+    ],
+  },
+  primaryType: "AdminKey",
+  message: {
+    purpose: "Admin Decryption Key",
+    version: "v1",
+  },
+};
 
 export default function UserRegister() {
   const [form, setForm] = useState({ name: "", phoneNumber: "", email: "" });
@@ -13,9 +34,22 @@ export default function UserRegister() {
   const navigate = useNavigate();
   const { state } = useLocation();
 
-  // address + publicKey already obtained in AuthGate and passed via state
   const preAddress = state?.address;
   const prePublicKey = state?.publicKey;
+
+  /* DERIVE ECIES PUBLIC KEY */
+  const derivePublicKey = async (address) => {
+    const signature = await window.ethereum.request({
+      method: "eth_signTypedData_v4",
+      params: [address, JSON.stringify(TYPED_DATA)],
+    });
+
+    const privKeyHex = keccak256(getBytes(signature));
+    const sk = new PrivateKey(getBytes(privKeyHex));
+    const derivedpubkey = hexlify(sk.publicKey.toBytes());
+
+    return derivedpubkey;
+  };
 
   const handleSubmit = async () => {
     setError("");
@@ -32,13 +66,18 @@ export default function UserRegister() {
         publicKey = result.publicKey;
       }
 
+      setStep("Generating encryption keys...");
+      const derivedpubkey = await derivePublicKey(address);
+
       setStep("Registering your profile...");
+
       const res = await fetch(`${API}/users`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           walletAddress: address,
-          pubkey: publicKey,   // ← schema field is "pubkey"
+          pubkey: publicKey,
+          derivedpubkey: derivedpubkey,
           name: form.name,
           phoneNumber: form.phoneNumber,
           email: form.email,
@@ -51,8 +90,13 @@ export default function UserRegister() {
       }
 
       const { user } = await res.json();
+
       setStep("Success! Redirecting...");
-      setTimeout(() => navigate("/user/dashboard", { state: { address, publicKey, user } }), 700);
+
+      setTimeout(() =>
+        navigate("/user/dashboard", {
+          state: { address, publicKey, derivedpubkey, user },
+        }), 700);
 
     } catch (err) {
       console.error(err);
@@ -130,6 +174,8 @@ export default function UserRegister() {
   );
 }
 
+/* UI components remain unchanged */
+
 function Field({ label, placeholder, value, onChange, type = "text", icon, color }) {
   const [focused, setFocused] = useState(false);
   return (
@@ -161,6 +207,8 @@ function Spinner({ dark }) {
     }} />
   );
 }
+
+/* styles remain exactly same */
 
 const styles = {
   root: {
