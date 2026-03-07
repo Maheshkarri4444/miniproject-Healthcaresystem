@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>HealthChain Admin Key Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.5/ethers.umd.min.js"></script>
+  <style>
+    body {
+      font-family: monospace;
+      background: #060a12;
+      color: #f0f4ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 36px;
+      max-width: 600px;
+      width: 100%;
+    }
+    h2 { color: #06b6d4; margin: 0 0 8px; }
+    p  { color: #64748b; font-size: 13px; margin: 0 0 24px; }
+    button {
+      background: linear-gradient(135deg, #06b6d4, #0284c7);
+      border: none; border-radius: 10px;
+      padding: 13px 24px; color: #000;
+      font-weight: 800; font-size: 15px;
+      cursor: pointer; width: 100%;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .output {
+      margin-top: 24px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 20px;
+      display: none;
+    }
+    .row { margin-bottom: 16px; }
+    .label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+    .value {
+      font-size: 12px;
+      color: #06b6d4;
+      word-break: break-all;
+      background: rgba(6,182,212,0.06);
+      border: 1px solid rgba(6,182,212,0.15);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .env-block {
+      background: rgba(16,185,129,0.06);
+      border: 1px solid rgba(16,185,129,0.2);
+      border-radius: 8px;
+      padding: 14px;
+      color: #10b981;
+      font-size: 12px;
+      line-height: 1.8;
+      white-space: pre;
+    }
+    .copy-btn {
+      background: rgba(16,185,129,0.1);
+      border: 1px solid rgba(16,185,129,0.25);
+      color: #10b981;
+      padding: 7px 14px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      margin-top: 10px;
+      width: auto;
+    }
+    .warning {
+      background: rgba(239,68,68,0.08);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: #fca5a5;
+      font-size: 12px;
+      margin-top: 16px;
+      line-height: 1.6;
+    }
+    .error { color: #f87171; margin-top: 16px; font-size: 13px; display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid rgba(0,0,0,0.2);
+      border-top-color: #000;
+      border-radius: 50%;
+      display: inline-block;
+      animation: spin 0.7s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h2>🔑 Admin Key Generator</h2>
+  <p>
+    Signs a fixed message with your admin MetaMask wallet to deterministically
+    derive an ECIES keypair. Run this once — as long as you use the same wallet
+    and same message, you'll always get the same keys.
+  </p>
+
+  <button id="generateBtn" onclick="generateKeys()">
+    🦊 Connect & Generate Keys
+  </button>
+  <div class="error" id="errorBox"></div>
+  <div class="output" id="output"></div>
+</div>
+
+<script type="module">
+  // Import eciesjs from CDN
+  const eciesModule = await import("https://cdn.jsdelivr.net/npm/eciesjs@0.4.10/+esm");
+  window.EciesPrivateKey = eciesModule.PrivateKey;
+
+  window.generateKeys = async function () {
+    const btn = document.getElementById("generateBtn");
+    const errorBox = document.getElementById("errorBox");
+    const output = document.getElementById("output");
+
+    errorBox.style.display = "none";
+    output.style.display = "none";
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Waiting for MetaMask...';
+
+    try {
+      if (!window.ethereum) throw new Error("MetaMask not detected. Please install MetaMask.");
+
+      const SIGN_MESSAGE = "HealthChain Admin Decryption Key v1";
+
+      // 1️⃣ Connect wallet
+      const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+      const address = accounts[0];
+
+      btn.innerHTML = '<span class="spinner"></span>Sign the message in MetaMask...';
+
+      // 2️⃣ Sign fixed message — same wallet + same message = same signature always
+      const signature = await ethereum.request({
+        method: "personal_sign",
+        params: [SIGN_MESSAGE, address],
+      });
+
+      // 3️⃣ Derive private key: keccak256(signatureBytes)
+      const sigBytes = ethers.getBytes(signature);
+      const privKeyHex = ethers.keccak256(sigBytes);
+
+      // 4️⃣ Derive public key via eciesjs
+      const sk = new window.EciesPrivateKey(ethers.getBytes(privKeyHex));
+      const pubKeyHex = ethers.hexlify(sk.publicKey.toBytes());
+
+      // 5️⃣ Build .env block
+      const envBlock =
+        `VITE_ADMIN_PUBKEY=${pubKeyHex}\n` +
+        `VITE_SIGN_MESSAGE=${SIGN_MESSAGE}`;
+
+      output.style.display = "block";
+      output.innerHTML = `
+        <div class="row">
+          <div class="label">Admin Wallet Address</div>
+          <div class="value">${address}</div>
+        </div>
+        <div class="row">
+          <div class="label">Derived Public Key (store in .env)</div>
+          <div class="value">${pubKeyHex}</div>
+        </div>
+        <div class="row">
+          <div class="label">Derived Private Key (never store — re-derived at runtime)</div>
+          <div class="value" style="color:#f59e0b">${privKeyHex}</div>
+        </div>
+        <div class="row">
+          <div class="label">Paste into your .env file</div>
+          <div class="env-block">${envBlock}</div>
+          <button class="copy-btn" onclick="navigator.clipboard.writeText(\`${envBlock}\`).then(()=>this.textContent='✓ Copied!')">
+            Copy .env lines
+          </button>
+        </div>
+        <div class="warning">
+          ⚠️ The private key shown above is for verification only — never store it anywhere.
+          It is re-derived at runtime each time the admin signs the same message in MetaMask.
+          Only <strong>VITE_ADMIN_PUBKEY</strong> goes in your .env file.
+        </div>
+      `;
+
+    } catch (err) {
+      errorBox.style.display = "block";
+      errorBox.textContent = "⚠️ " + (err.message || "Something went wrong");
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = "🦊 Connect & Generate Keys";
+  };
+</script>
+</body>
+</html>
+```
+
+---
+
+### What this gives you
+```
+VITE_ADMIN_PUBKEY=0x03a1b2c3...   ← put this in .env
+VITE_SIGN_MESSAGE=HealthChain Admin Decryption Key v1  ← put this in .env

@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema(
   {
+    walletAddress: {
+      type: String,
+      required: true,
+      unique: true
+    },
     pubkey: {
       type: String,
       required: true,

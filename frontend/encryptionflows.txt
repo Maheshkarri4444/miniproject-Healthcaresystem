@@ -1,0 +1,21 @@
+Doctor Certificate (PDF)
+        ↓
+Generate random AES-256 key
+        ↓
+Encrypt file using AES
+        ↓
+Encrypt AES key using ADMIN public key (ECIES)
+        ↓
+Upload encrypted file to IPFS
+        ↓
+Store:
+   - ipfsHash
+   - encryptedAESKey
+
+
+
+EncryptedFile (already encrypted for admin)
+↓
+Upload to IPFS
+↓
+Store CID in blockchain + MongoDB

@@ -1,21 +1,52 @@
 const User = require("../models/User");
 
-exports.createUser = async (req, res) => {
+const createUser = async (req, res) => {
   try {
-    const user = await User.create(req.body);
-    res.status(201).json(user);
+    const { walletAddress, pubkey, name, phoneNumber, email } = req.body;
+    const user = new User({
+      walletAddress: walletAddress.toLowerCase(),
+      pubkey,
+      name,
+      phoneNumber,
+      email,
+    });
+    await user.save();
+    res.status(201).json({ success: true, user });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 };
 
-exports.getAllUsers = async (req, res) => {
-  const users = await User.find();
-  res.json(users);
+const getAllUsers = async (req, res) => {
+  try {
+    const users = await User.find().sort({ createdAt: -1 });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };
 
-exports.getUserByPubkey = async (req, res) => {
-  const user = await User.findOne({ pubkey: req.params.pubkey });
-  if (!user) return res.status(404).json({ message: "User not found" });
-  res.json(user);
+const getUserByPubkey = async (req, res) => {
+  try {
+    const user = await User.findOne({ pubkey: req.params.pubkey });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };
+
+const getUserByAddress = async (req, res) => {
+  try {
+    const user = await User.findOne({
+      walletAddress: req.params.address.toLowerCase(),
+    });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+module.exports = { createUser, getAllUsers, getUserByPubkey, getUserByAddress };
