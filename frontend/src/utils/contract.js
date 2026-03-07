@@ -3,7 +3,7 @@ import DoctorRegistryABI from "../abi/DoctorRegistryABI.json";
 import { getBytes, hexlify, keccak256 } from "ethers";
 
 
-const CONTRACT_ADDRESS = "0xF9fcf870Ae8F603bC6736f5C528618bfA357353d";
+const CONTRACT_ADDRESS = import.meta.env.VITE_DOCTOR_CONTRACT;
 const SEPOLIA_CHAIN_ID = "0xaa36a7"; // 11155111 in hex
 
 export const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase();

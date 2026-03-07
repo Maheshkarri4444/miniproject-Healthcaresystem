@@ -2,3 +2,16 @@
 /cache
 /node_modules
 /.env
+
+**/node_modules/
+
+.env
+*/.env
+.env.
+*/.env.
+
+cache/
+**/cache/
+
+artifacts/
+**/artifacts/
