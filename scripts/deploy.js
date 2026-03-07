@@ -25,9 +25,9 @@ async function main() {
   console.log("HealthcareManager deployed to:", await manager.getAddress());
 }
 
-// DoctorRegistry deployed to: 0xF9fcf870Ae8F603bC6736f5C528618bfA357353d
-// MedicalAccessNFT deployed to: 0x93ED10C80120aAF7263567246Dc3D467DafE9fA6
-// HealthcareManager deployed to: 0x9011138e38BDb9a6D51E00913cDdf9F533d2742E
+// DoctorRegistry deployed to: 0x5FbDB2315678afecb367f032d93F642f64180aa3
+// MedicalAccessNFT deployed to: 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
+// HealthcareManager deployed to: 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0
 
 main().catch((error) => {
   console.error(error);
