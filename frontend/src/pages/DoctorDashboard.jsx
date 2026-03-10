@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { isDoctorVerified } from "../utils/contract";
+import { isDoctorVerified, getMedicalContract } from "../utils/contract";
+
+const API = "http://localhost:5010/api";
 
 export default function DoctorDashboard() {
   const navigate = useNavigate();
@@ -10,12 +12,64 @@ export default function DoctorDashboard() {
 
   const [verified, setVerified] = useState(null);
   const [checkingChain, setCheckingChain] = useState(true);
+  const [activeTab, setActiveTab] = useState("overview");
+
+  // NFT / patient records state
+  const [nftRecords, setNftRecords] = useState([]);
+  const [loadingNfts, setLoadingNfts] = useState(false);
+  const [patientNames, setPatientNames] = useState({}); // pubkey -> name
 
   useEffect(() => {
     if (!address) return;
     isDoctorVerified(address)
       .then(v => { setVerified(v); setCheckingChain(false); })
       .catch(() => { setVerified(false); setCheckingChain(false); });
+  }, [address]);
+
+  // Fetch NFTs when tab becomes active or doctor is verified
+  useEffect(() => {
+    if (activeTab === "patients" && verified && address) {
+      fetchDoctorNFTs();
+    }
+  }, [activeTab, verified, address]);
+
+  const fetchPatientName = async (pubkey) => {
+    if (!pubkey || patientNames[pubkey]) return;
+    try {
+      const res = await fetch(`${API}/users/${pubkey}`);
+      if (!res.ok) return;
+      const user = await res.json();
+      setPatientNames(prev => ({ ...prev, [pubkey]: user?.name || "Unknown Patient" }));
+    } catch {
+      setPatientNames(prev => ({ ...prev, [pubkey]: "Unknown Patient" }));
+    }
+  };
+
+  const fetchDoctorNFTs = useCallback(async () => {
+    setLoadingNfts(true);
+    try {
+      const contract = await getMedicalContract();
+      const raw = await contract.getAccessDataByDoctor(address);
+
+      const records = raw.map(r => ({
+        patient: r.patient,
+        doctor: r.doctor,
+        ipfsHash: r.ipfsHash,
+        revoked: r.revoked,
+        tokenId: r.tokenId !== undefined ? Number(r.tokenId) : null,
+      }));
+
+      setNftRecords(records);
+
+      // Fetch patient names for unique patient addresses
+      const uniquePatients = [...new Set(records.map(r => r.patient).filter(Boolean))];
+      for (const pubkey of uniquePatients) {
+        fetchPatientName(pubkey);
+      }
+    } catch (e) {
+      console.error("fetchDoctorNFTs:", e);
+    }
+    setLoadingNfts(false);
   }, [address]);
 
   return (
@@ -98,39 +152,154 @@ export default function DoctorDashboard() {
           )}
         </div>
 
-        {/* Stats */}
-        <div style={styles.statsGrid}>
-          <StatCard icon="👥" label="Patients" value={verified ? "—" : "Locked"} color="#06b6d4" locked={!verified} />
-          <StatCard icon="🗂️" label="Medical Records" value={verified ? "—" : "Locked"} color="#8b5cf6" locked={!verified} />
-          <StatCard icon="📋" label="Documents Uploaded" value={doctor?.docs?.length ?? "—"} color="#10b981" />
-          <StatCard icon="📅" label="Joined" value={doctor?.createdAt ? new Date(doctor.createdAt).toLocaleDateString() : "—"} color="#f59e0b" />
+        {/* Tabs */}
+        <div style={styles.tabBar}>
+          {[
+            { key: "overview", icon: "🏠", label: "Overview" },
+            { key: "patients", icon: "👥", label: "Patient Records" },
+          ].map(t => (
+            <button
+              key={t.key}
+              style={{ ...styles.tabBtn, ...(activeTab === t.key ? styles.tabBtnActive : {}) }}
+              onClick={() => setActiveTab(t.key)}
+            >
+              <span style={{ fontSize: 16 }}>{t.icon}</span>
+              <span>{t.label}</span>
+            </button>
+          ))}
         </div>
 
-        {/* Profile Info */}
-        {doctor && (
-          <div style={styles.infoCard}>
-            <h3 style={styles.infoCardTitle}>Profile Details</h3>
-            <div style={styles.infoGrid}>
-              <InfoItem icon="📧" label="Email" value={doctor.email} />
-              <InfoItem icon="📱" label="Phone" value={doctor.phoneNumber} />
-              <InfoItem icon="🔑" label="Wallet" value={`${doctor.walletAddress?.slice(0, 10)}...${doctor.walletAddress?.slice(-8)}`} mono />
-              <InfoItem icon="📄" label="Documents" value={`${doctor.docs?.length || 0} file(s) submitted`} />
+        {/* ══════ OVERVIEW TAB ══════ */}
+        {activeTab === "overview" && (
+          <>
+            {/* Stats */}
+            <div style={styles.statsGrid}>
+              <StatCard icon="👥" label="Patients" value={verified ? nftRecords.length || "—" : "Locked"} color="#06b6d4" locked={!verified} />
+              <StatCard icon="🗂️" label="Medical Records" value={verified ? nftRecords.filter(r => !r.revoked).length || "—" : "Locked"} color="#8b5cf6" locked={!verified} />
+              <StatCard icon="📋" label="Documents Uploaded" value={doctor?.docs?.length ?? "—"} color="#10b981" />
+              <StatCard icon="📅" label="Joined" value={doctor?.createdAt ? new Date(doctor.createdAt).toLocaleDateString() : "—"} color="#f59e0b" />
+            </div>
+
+            {/* Profile Info */}
+            {doctor && (
+              <div style={styles.infoCard}>
+                <h3 style={styles.infoCardTitle}>Profile Details</h3>
+                <div style={styles.infoGrid}>
+                  <InfoItem icon="📧" label="Email" value={doctor.email} />
+                  <InfoItem icon="📱" label="Phone" value={doctor.phoneNumber} />
+                  <InfoItem icon="🔑" label="Wallet" value={`${doctor.walletAddress?.slice(0, 10)}...${doctor.walletAddress?.slice(-8)}`} mono />
+                  <InfoItem icon="📄" label="Documents" value={`${doctor.docs?.length || 0} file(s) submitted`} />
+                </div>
+              </div>
+            )}
+
+            {/* Locked overlay message */}
+            {!checkingChain && !verified && (
+              <div style={styles.lockedCard}>
+                <span style={{ fontSize: 40 }}>⏳</span>
+                <h3 style={{ color: "#f0f4ff", margin: "12px 0 8px", fontWeight: 700 }}>
+                  Awaiting Admin Verification
+                </h3>
+                <p style={{ color: "#64748b", fontSize: 14, maxWidth: 420, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
+                  Your credentials are being reviewed. Once an admin verifies your wallet on-chain, you'll gain full access to patient records and medical data management.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ══════ PATIENT RECORDS TAB ══════ */}
+        {activeTab === "patients" && (
+          <div style={styles.panel}>
+            <div style={styles.panelHeader}>
+              <h2 style={styles.panelTitle}>Patient Records</h2>
+              <p style={styles.panelSubtitle}>NFT-gated medical records shared with you by patients.</p>
+            </div>
+            <div style={styles.panelBody}>
+
+              {!verified && !checkingChain ? (
+                <div style={styles.lockedCard}>
+                  <span style={{ fontSize: 36 }}>🔒</span>
+                  <h3 style={{ color: "#f0f4ff", margin: "12px 0 8px", fontWeight: 700 }}>
+                    Access Restricted
+                  </h3>
+                  <p style={{ color: "#64748b", fontSize: 14, maxWidth: 380, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
+                    You need to be verified on-chain before accessing patient records.
+                  </p>
+                </div>
+              ) : loadingNfts ? (
+                <div style={styles.centerBox}>
+                  <Spinner color="#06b6d4" size={28} />
+                  <span style={{ color: "#64748b", fontSize: 13 }}>Fetching on-chain records…</span>
+                </div>
+              ) : nftRecords.length === 0 ? (
+                <div style={styles.emptyCard}>
+                  <span style={{ fontSize: 44 }}>📭</span>
+                  <h3 style={{ color: "#f0f4ff", margin: "14px 0 8px", fontWeight: 700 }}>No Records Yet</h3>
+                  <p style={{ color: "#64748b", fontSize: 14, maxWidth: 340, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
+                    No patients have shared medical records with you yet.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <button style={styles.refreshBtn} onClick={fetchDoctorNFTs}>
+                      ↻ Refresh
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {nftRecords.map((record, i) => {
+                      const patientName = patientNames[record.patient] || null;
+                      return (
+                        <div key={i} style={{ ...styles.recordRow, opacity: record.revoked ? 0.4 : 1 }}>
+                          {/* Patient info */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
+                            <div style={styles.patientAvatar}>
+                              <span style={{ fontSize: 18 }}>👤</span>
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ color: "#e2e8f0", fontWeight: 700, fontSize: 14 }}>
+                                {patientName
+                                  ? patientName
+                                  : <span style={{ color: "#475569", fontFamily: "monospace", fontSize: 12 }}>
+                                      {record.patient?.slice(0, 14)}…{record.patient?.slice(-6)}
+                                    </span>
+                                }
+                              </div>
+                              <div style={{ fontSize: 11, color: "#475569", fontFamily: "monospace", marginTop: 2 }}>
+                                {record.patient?.slice(0, 18)}…
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* IPFS + status */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+                            {record.revoked
+                              ? <span style={styles.revokedBadge}>Revoked</span>
+                              : <span style={styles.activeBadge}>Active</span>
+                            }
+                            {record.tokenId != null && (
+                              <span style={styles.tokenBadge}>#{record.tokenId}</span>
+                            )}
+                            <a
+                              href={`https://gateway.pinata.cloud/ipfs/${record.ipfsHash}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={styles.rawLink}
+                            >
+                              IPFS ↗
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
 
-        {/* Locked overlay message */}
-        {!checkingChain && !verified && (
-          <div style={styles.lockedCard}>
-            <span style={{ fontSize: 40 }}>⏳</span>
-            <h3 style={{ color: "#f0f4ff", margin: "12px 0 8px", fontWeight: 700 }}>
-              Awaiting Admin Verification
-            </h3>
-            <p style={{ color: "#64748b", fontSize: 14, maxWidth: 420, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
-              Your credentials are being reviewed. Once an admin verifies your wallet on-chain, you'll gain full access to patient records and medical data management.
-            </p>
-          </div>
-        )}
       </div>
 
       <style>{`@keyframes hc-spin { to { transform: rotate(360deg); } }`}</style>
@@ -140,10 +309,7 @@ export default function DoctorDashboard() {
 
 function StatCard({ icon, label, value, color, locked }) {
   return (
-    <div style={{
-      ...styles.statCard,
-      opacity: locked ? 0.5 : 1,
-    }}>
+    <div style={{ ...styles.statCard, opacity: locked ? 0.5 : 1 }}>
       <div style={{ ...styles.statIcon, background: `${color}12`, border: `1px solid ${color}25` }}>
         <span style={{ fontSize: 22 }}>{locked ? "🔒" : icon}</span>
       </div>
@@ -164,6 +330,17 @@ function InfoItem({ icon, label, value, mono }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function Spinner({ color = "#fff", size = 14 }) {
+  return (
+    <span style={{
+      width: size, height: size,
+      border: `2px solid ${color}30`, borderTopColor: color,
+      borderRadius: "50%", display: "inline-block",
+      animation: "hc-spin 0.7s linear infinite", flexShrink: 0,
+    }} />
   );
 }
 
@@ -212,8 +389,7 @@ const styles = {
   subtitle: { fontSize: 14, color: "#64748b", margin: 0 },
   verifyBanner: {
     borderRadius: 16, padding: "18px 22px", marginBottom: 28,
-    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
-    flexWrap: "wrap",
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
   },
   verifyBannerLeft: { display: "flex", alignItems: "center", gap: 16 },
   pendingBadge: {
@@ -223,6 +399,15 @@ const styles = {
   verifiedBadge: {
     background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)",
     color: "#10b981", padding: "6px 14px", borderRadius: 100, fontSize: 12, fontWeight: 600,
+  },
+  tabBar: { display: "flex", gap: 8, marginBottom: 28, flexWrap: "wrap" },
+  tabBtn: {
+    display: "flex", alignItems: "center", gap: 8,
+    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
+    color: "#64748b", padding: "11px 20px", borderRadius: 12, cursor: "pointer", fontSize: 14, fontWeight: 600,
+  },
+  tabBtnActive: {
+    background: "rgba(6,182,212,0.12)", border: "1px solid rgba(6,182,212,0.35)", color: "#06b6d4",
   },
   statsGrid: {
     display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -251,5 +436,55 @@ const styles = {
     background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
     borderRadius: 20, padding: "48px 32px",
     display: "flex", flexDirection: "column", alignItems: "center",
+  },
+  // Panel (for Patient Records tab)
+  panel: {
+    background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
+    borderRadius: 20, overflow: "hidden",
+  },
+  panelHeader: { padding: "24px 28px 18px", borderBottom: "1px solid rgba(255,255,255,0.05)" },
+  panelTitle:    { fontSize: 18, fontWeight: 800, color: "#f0f4ff", margin: "0 0 4px" },
+  panelSubtitle: { fontSize: 13, color: "#64748b", margin: 0, lineHeight: 1.6 },
+  panelBody:     { padding: "22px 28px", display: "flex", flexDirection: "column", gap: 14 },
+  centerBox: {
+    display: "flex", flexDirection: "column", alignItems: "center",
+    justifyContent: "center", gap: 12, padding: 32,
+  },
+  emptyCard: {
+    display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 32px", gap: 8,
+  },
+  recordRow: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
+    borderRadius: 12, padding: "14px 16px", gap: 12, flexWrap: "wrap",
+  },
+  patientAvatar: {
+    width: 42, height: 42, borderRadius: 12, flexShrink: 0,
+    background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.2)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  activeBadge: {
+    display: "inline-block",
+    background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)",
+    color: "#10b981", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600,
+  },
+  revokedBadge: {
+    display: "inline-block",
+    background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)",
+    color: "#f87171", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600,
+  },
+  tokenBadge: {
+    background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.25)",
+    color: "#8b5cf6", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600,
+  },
+  rawLink: {
+    color: "#475569", fontSize: 12, textDecoration: "none", fontWeight: 600,
+    padding: "4px 10px", borderRadius: 6,
+    background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)",
+  },
+  refreshBtn: {
+    display: "flex", alignItems: "center", gap: 6,
+    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
+    color: "#64748b", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12,
   },
 };
