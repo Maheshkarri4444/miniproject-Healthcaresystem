@@ -85,3 +85,20 @@ exports.getRecordByTokenId = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+exports.getRecordByIpfsHash = async (req, res) => {
+  try {
+    const { ipfsHash } = req.params;
+    console.log("ipfs hash",ipfsHash)
+
+    const record = await MedicalRecord.findOne({ ipfsHash });
+
+    if (!record) {
+      return res.status(404).json({ message: "Record not found" });
+    }
+
+    res.json(record);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

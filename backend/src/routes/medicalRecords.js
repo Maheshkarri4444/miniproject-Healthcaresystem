@@ -11,4 +11,7 @@ router.get("/user/:pubkey", controller.getRecordsByUser);
 
 router.get("/token/:tokenId", controller.getRecordByTokenId);
 
+router.get("/ipfs/:ipfsHash", controller.getRecordByIpfsHash);
+
+
 module.exports = router;

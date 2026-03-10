@@ -1,139 +1,197 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { isDoctorVerified, getMedicalContract } from "../utils/contract";
+import { deriveUserKeypair } from "../utils/deriveKeypair";
+import { decrypt } from "eciesjs";
+import { getBytes } from "ethers";
 
 const API = "http://localhost:5010/api";
 
+// ─── Crypto helpers ───────────────────────────────────────────────────────────
+
+function base64ToUint8(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function decryptFileForDoctor(encryptedFileBuffer, encDoctorAesKeyHex, doctorPrivKeyHex) {
+  const aesKey    = decrypt(getBytes(doctorPrivKeyHex), getBytes(encDoctorAesKeyHex));
+  const cryptoKey = await crypto.subtle.importKey("raw", aesKey, { name: "AES-GCM" }, false, ["decrypt"]);
+  const encBytes  = new Uint8Array(encryptedFileBuffer);
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: encBytes.slice(0, 12) },
+    cryptoKey,
+    encBytes.slice(12)
+  );
+  return new Uint8Array(decrypted);
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export default function DoctorDashboard() {
-  const navigate = useNavigate();
-  const { state } = useLocation();
-  const address = state?.address || "";
-  const doctor = state?.doctor || null;
+  const navigate    = useNavigate();
+  const { state }   = useLocation();
+  const address     = state?.address || "";
+  const doctor      = state?.doctor  || null;
 
-  const [verified, setVerified] = useState(null);
+  const [verified,      setVerified]      = useState(null);
   const [checkingChain, setCheckingChain] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab,     setActiveTab]     = useState("overview");
 
-  // NFT / patient records state
-  const [nftRecords, setNftRecords] = useState([]);
+  // NFT records from chain
+  const [nftRecords,  setNftRecords]  = useState([]);
   const [loadingNfts, setLoadingNfts] = useState(false);
-  const [patientNames, setPatientNames] = useState({}); // pubkey -> name
 
+  // DB metadata keyed by ipfsHash
+  // null   = fetch in-flight (show spinner)
+  // object = loaded
+  // key absent = not started yet
+  const [recordMeta, setRecordMeta] = useState({});
+
+  // Decrypt state keyed by ipfsHash
+  const [decryptingId,  setDecryptingId]  = useState(null);
+  const [decryptedUrls, setDecryptedUrls] = useState({});
+  const [decryptErrors, setDecryptErrors] = useState({});
+
+  // ─── On-chain verification ─────────────────────────────────────────────────
   useEffect(() => {
     if (!address) return;
     isDoctorVerified(address)
-      .then(v => { setVerified(v); setCheckingChain(false); })
+      .then(v  => { setVerified(v);     setCheckingChain(false); })
       .catch(() => { setVerified(false); setCheckingChain(false); });
   }, [address]);
 
-  // Fetch NFTs when tab becomes active or doctor is verified
+  // ─── Fetch NFTs when tab becomes active ───────────────────────────────────
   useEffect(() => {
-    if (activeTab === "patients" && verified && address) {
-      fetchDoctorNFTs();
-    }
+    if (activeTab === "patients" && verified && address) fetchDoctorNFTs();
   }, [activeTab, verified, address]);
 
-  const fetchPatientName = async (pubkey) => {
-    if (!pubkey || patientNames[pubkey]) return;
+  // ─── Fetch single record metadata from DB by ipfsHash ─────────────────────
+  const fetchRecordMeta = useCallback(async (ipfsHash) => {
+    if (!ipfsHash) return;
+    // Already loading or loaded — skip
+    setRecordMeta(prev => {
+      if (ipfsHash in prev) return prev;         // already started
+      return { ...prev, [ipfsHash]: null };      // mark in-flight
+    });
     try {
-      const res = await fetch(`${API}/users/${pubkey}`);
-      if (!res.ok) return;
-      const user = await res.json();
-      setPatientNames(prev => ({ ...prev, [pubkey]: user?.name || "Unknown Patient" }));
-    } catch {
-      setPatientNames(prev => ({ ...prev, [pubkey]: "Unknown Patient" }));
+      const res = await fetch(`${API}/records/ipfs/${ipfsHash}`);
+      if (!res.ok) {
+        setRecordMeta(prev => ({ ...prev, [ipfsHash]: undefined }));
+        return;
+      }
+      const data = await res.json();
+      setRecordMeta(prev => ({ ...prev, [ipfsHash]: data }));
+    } catch (e) {
+      console.error("fetchRecordMeta:", e);
+      setRecordMeta(prev => ({ ...prev, [ipfsHash]: undefined }));
     }
-  };
+  }, []);
 
+  // ─── Fetch doctor NFTs from blockchain ────────────────────────────────────
   const fetchDoctorNFTs = useCallback(async () => {
     setLoadingNfts(true);
     try {
       const contract = await getMedicalContract();
-      const raw = await contract.getAccessDataByDoctor(address);
+      const raw      = await contract.getAccessDataByDoctor(address);
 
       const records = raw.map(r => ({
-        patient: r.patient,
-        doctor: r.doctor,
+        patient:  r.patient,
+        doctor:   r.doctor,
         ipfsHash: r.ipfsHash,
-        revoked: r.revoked,
-        tokenId: r.tokenId !== undefined ? Number(r.tokenId) : null,
+        revoked:  r.revoked,
+        tokenId:  r.tokenId !== undefined ? Number(r.tokenId) : null,
       }));
 
       setNftRecords(records);
 
-      // Fetch patient names for unique patient addresses
-      const uniquePatients = [...new Set(records.map(r => r.patient).filter(Boolean))];
-      for (const pubkey of uniquePatients) {
-        fetchPatientName(pubkey);
+      // Kick off DB metadata fetch for every record using ipfsHash
+      for (const rec of records) {
+        if (rec.ipfsHash) fetchRecordMeta(rec.ipfsHash);
       }
     } catch (e) {
       console.error("fetchDoctorNFTs:", e);
     }
     setLoadingNfts(false);
-  }, [address]);
+  }, [address, fetchRecordMeta]);
 
+  // ─── Decrypt & View ────────────────────────────────────────────────────────
+  // Mirrors UserDashboard flow exactly — uses doctor_encAesKey from the bundle
+  const handleDecryptAndView = async (record) => {
+    const key = record.ipfsHash;
+    if (decryptedUrls[key]) { window.open(decryptedUrls[key].url, "_blank"); return; }
+
+    setDecryptingId(key);
+    setDecryptErrors(prev => ({ ...prev, [key]: null }));
+    try {
+      // Derive doctor private key via MetaMask signature
+      const { privateKey: doctorPrivKey } = await deriveUserKeypair(address);
+
+      // Fetch encrypted bundle from IPFS
+      const ipfsRes = await fetch(`https://gateway.pinata.cloud/ipfs/${key}`);
+      if (!ipfsRes.ok) throw new Error(`IPFS fetch failed (${ipfsRes.status})`);
+
+      const bundle = JSON.parse(await ipfsRes.text());
+      if (!bundle.doctor_encAesKey) throw new Error("No doctor_encAesKey in bundle.");
+      if (!bundle.encrypted_file)   throw new Error("No encrypted_file in bundle.");
+
+      const decryptedBytes = await decryptFileForDoctor(
+        base64ToUint8(bundle.encrypted_file).buffer,
+        bundle.doctor_encAesKey,
+        doctorPrivKey
+      );
+
+      const url = URL.createObjectURL(
+        new Blob([decryptedBytes], { type: bundle.mimeType || "application/octet-stream" })
+      );
+      setDecryptedUrls(prev => ({ ...prev, [key]: { url } }));
+      window.open(url, "_blank");
+    } catch (e) {
+      console.error("Decrypt error:", e);
+      setDecryptErrors(prev => ({ ...prev, [key]: e.message || "Decryption failed." }));
+    }
+    setDecryptingId(null);
+  };
+
+  // ─── Render ────────────────────────────────────────────────────────────────
   return (
-    <div style={styles.root}>
-      <div style={styles.orb1} /><div style={styles.orb2} />
+    <div style={S.root}>
+      <div style={S.orb1} /><div style={S.orb2} /><div style={S.gridBg} />
 
-      <div style={styles.container}>
+      <div style={S.container}>
+
         {/* Nav */}
-        <nav style={styles.nav}>
-          <span style={styles.logo}>
-            Health<span style={{ color: "#06b6d4" }}>Chain</span>
-          </span>
-          <div style={styles.navRight}>
-            <span style={styles.networkBadge}>⬡ Sepolia</span>
-            {address && (
-              <span style={styles.addrBadge}>
-                {address.slice(0, 6)}...{address.slice(-4)}
-              </span>
-            )}
-            <button style={styles.logoutBtn} onClick={() => navigate("/")}>
-              Disconnect
-            </button>
+        <nav style={S.nav}>
+          <span style={S.logo}>Health<span style={{ color: "#06b6d4" }}>Chain</span></span>
+          <div style={S.navRight}>
+            <span style={S.networkBadge}>⬡ Sepolia</span>
+            {address && <span style={S.addrBadge}>{address.slice(0,6)}…{address.slice(-4)}</span>}
+            <button style={S.logoutBtn} onClick={() => navigate("/")}>Disconnect</button>
           </div>
         </nav>
 
         {/* Header */}
-        <div style={styles.header}>
-          <div style={styles.avatarWrap}>
-            <span style={{ fontSize: 38 }}>🩺</span>
-          </div>
+        <div style={S.header}>
+          <div style={S.avatarWrap}><span style={{ fontSize: 38 }}>🩺</span></div>
           <div>
-            <h1 style={styles.welcome}>
-              {doctor?.name ? `Dr. ${doctor.name}` : "Doctor Dashboard"}
-            </h1>
-            <p style={styles.subtitle}>
-              {doctor?.email || ""}
-            </p>
+            <h1 style={S.welcome}>{doctor?.name ? `Dr. ${doctor.name}` : "Doctor Dashboard"}</h1>
+            <p style={S.subtitle}>{doctor?.email || ""}</p>
           </div>
         </div>
 
-        {/* Verification Status Banner */}
+        {/* Verification Banner */}
         <div style={{
-          ...styles.verifyBanner,
-          background: checkingChain
-            ? "rgba(100,116,139,0.1)"
-            : verified
-              ? "rgba(16,185,129,0.08)"
-              : "rgba(245,158,11,0.08)",
+          ...S.verifyBanner,
+          background: checkingChain ? "rgba(100,116,139,0.1)" : verified ? "rgba(16,185,129,0.08)" : "rgba(245,158,11,0.08)",
           border: `1px solid ${checkingChain ? "rgba(100,116,139,0.2)" : verified ? "rgba(16,185,129,0.25)" : "rgba(245,158,11,0.25)"}`,
         }}>
-          <div style={styles.verifyBannerLeft}>
-            <span style={{ fontSize: 28 }}>
-              {checkingChain ? "⏳" : verified ? "✅" : "🔒"}
-            </span>
+          <div style={S.verifyBannerLeft}>
+            <span style={{ fontSize: 28 }}>{checkingChain ? "⏳" : verified ? "✅" : "🔒"}</span>
             <div>
-              <div style={{
-                fontSize: 15, fontWeight: 700,
-                color: checkingChain ? "#94a3b8" : verified ? "#10b981" : "#f59e0b",
-              }}>
-                {checkingChain
-                  ? "Checking on-chain status..."
-                  : verified
-                    ? "Verified Doctor — Full Access"
-                    : "Pending Admin Verification"}
+              <div style={{ fontSize: 15, fontWeight: 700, color: checkingChain ? "#94a3b8" : verified ? "#10b981" : "#f59e0b" }}>
+                {checkingChain ? "Checking on-chain status..." : verified ? "Verified Doctor — Full Access" : "Pending Admin Verification"}
               </div>
               <div style={{ fontSize: 13, color: "#64748b", marginTop: 3 }}>
                 {checkingChain
@@ -144,152 +202,209 @@ export default function DoctorDashboard() {
               </div>
             </div>
           </div>
-          {!checkingChain && !verified && (
-            <span style={styles.pendingBadge}>Under Review</span>
-          )}
-          {!checkingChain && verified && (
-            <span style={styles.verifiedBadge}>On-Chain ✓</span>
-          )}
+          {!checkingChain && !verified && <span style={S.pendingBadge}>Under Review</span>}
+          {!checkingChain &&  verified  && <span style={S.verifiedBadge}>On-Chain ✓</span>}
         </div>
 
         {/* Tabs */}
-        <div style={styles.tabBar}>
+        <div style={S.tabBar}>
           {[
-            { key: "overview", icon: "🏠", label: "Overview" },
+            { key: "overview", icon: "🏠", label: "Overview"       },
             { key: "patients", icon: "👥", label: "Patient Records" },
           ].map(t => (
-            <button
-              key={t.key}
-              style={{ ...styles.tabBtn, ...(activeTab === t.key ? styles.tabBtnActive : {}) }}
-              onClick={() => setActiveTab(t.key)}
-            >
-              <span style={{ fontSize: 16 }}>{t.icon}</span>
-              <span>{t.label}</span>
+            <button key={t.key}
+              style={{ ...S.tabBtn, ...(activeTab === t.key ? S.tabBtnActive : {}) }}
+              onClick={() => setActiveTab(t.key)}>
+              <span style={{ fontSize: 16 }}>{t.icon}</span><span>{t.label}</span>
             </button>
           ))}
         </div>
 
-        {/* ══════ OVERVIEW TAB ══════ */}
+        {/* ══════════ OVERVIEW TAB ══════════ */}
         {activeTab === "overview" && (
           <>
-            {/* Stats */}
-            <div style={styles.statsGrid}>
-              <StatCard icon="👥" label="Patients" value={verified ? nftRecords.length || "—" : "Locked"} color="#06b6d4" locked={!verified} />
-              <StatCard icon="🗂️" label="Medical Records" value={verified ? nftRecords.filter(r => !r.revoked).length || "—" : "Locked"} color="#8b5cf6" locked={!verified} />
-              <StatCard icon="📋" label="Documents Uploaded" value={doctor?.docs?.length ?? "—"} color="#10b981" />
-              <StatCard icon="📅" label="Joined" value={doctor?.createdAt ? new Date(doctor.createdAt).toLocaleDateString() : "—"} color="#f59e0b" />
+            <div style={S.statsGrid}>
+              <StatCard icon="👥" label="Unique Patients"
+                value={verified ? [...new Set(nftRecords.map(r => r.patient))].length || "—" : "Locked"}
+                color="#06b6d4" locked={!verified} />
+              <StatCard icon="🗂️" label="Active Records"
+                value={verified ? nftRecords.filter(r => !r.revoked).length || "—" : "Locked"}
+                color="#8b5cf6" locked={!verified} />
+              <StatCard icon="📋" label="Docs Submitted"
+                value={doctor?.docs?.length ?? "—"} color="#10b981" />
+              <StatCard icon="📅" label="Joined"
+                value={doctor?.createdAt ? new Date(doctor.createdAt).toLocaleDateString() : "—"}
+                color="#f59e0b" />
             </div>
 
-            {/* Profile Info */}
             {doctor && (
-              <div style={styles.infoCard}>
-                <h3 style={styles.infoCardTitle}>Profile Details</h3>
-                <div style={styles.infoGrid}>
-                  <InfoItem icon="📧" label="Email" value={doctor.email} />
-                  <InfoItem icon="📱" label="Phone" value={doctor.phoneNumber} />
-                  <InfoItem icon="🔑" label="Wallet" value={`${doctor.walletAddress?.slice(0, 10)}...${doctor.walletAddress?.slice(-8)}`} mono />
+              <div style={S.infoCard}>
+                <h3 style={S.infoCardTitle}>Profile Details</h3>
+                <div style={S.infoGrid}>
+                  <InfoItem icon="📧" label="Email"     value={doctor.email} />
+                  <InfoItem icon="📱" label="Phone"     value={doctor.phoneNumber} />
+                  <InfoItem icon="🔑" label="Wallet"
+                    value={`${doctor.walletAddress?.slice(0,10)}…${doctor.walletAddress?.slice(-8)}`} mono />
                   <InfoItem icon="📄" label="Documents" value={`${doctor.docs?.length || 0} file(s) submitted`} />
                 </div>
               </div>
             )}
 
-            {/* Locked overlay message */}
             {!checkingChain && !verified && (
-              <div style={styles.lockedCard}>
+              <div style={S.lockedCard}>
                 <span style={{ fontSize: 40 }}>⏳</span>
-                <h3 style={{ color: "#f0f4ff", margin: "12px 0 8px", fontWeight: 700 }}>
-                  Awaiting Admin Verification
-                </h3>
+                <h3 style={{ color: "#f0f4ff", margin: "12px 0 8px", fontWeight: 700 }}>Awaiting Admin Verification</h3>
                 <p style={{ color: "#64748b", fontSize: 14, maxWidth: 420, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
-                  Your credentials are being reviewed. Once an admin verifies your wallet on-chain, you'll gain full access to patient records and medical data management.
+                  Your credentials are being reviewed. Once an admin verifies your wallet on-chain,
+                  you'll gain full access to patient records and medical data management.
                 </p>
               </div>
             )}
           </>
         )}
 
-        {/* ══════ PATIENT RECORDS TAB ══════ */}
+        {/* ══════════ PATIENT RECORDS TAB ══════════ */}
         {activeTab === "patients" && (
-          <div style={styles.panel}>
-            <div style={styles.panelHeader}>
-              <h2 style={styles.panelTitle}>Patient Records</h2>
-              <p style={styles.panelSubtitle}>NFT-gated medical records shared with you by patients.</p>
+          <div style={S.panel}>
+            <div style={S.panelHeader}>
+              <h2 style={S.panelTitle}>Patient Records</h2>
+              <p style={S.panelSubtitle}>NFT-gated medical records shared with you by patients. Decrypt to view any file.</p>
             </div>
-            <div style={styles.panelBody}>
+            <div style={S.panelBody}>
 
               {!verified && !checkingChain ? (
-                <div style={styles.lockedCard}>
+                <div style={S.lockedCard}>
                   <span style={{ fontSize: 36 }}>🔒</span>
-                  <h3 style={{ color: "#f0f4ff", margin: "12px 0 8px", fontWeight: 700 }}>
-                    Access Restricted
-                  </h3>
+                  <h3 style={{ color: "#f0f4ff", margin: "12px 0 8px", fontWeight: 700 }}>Access Restricted</h3>
                   <p style={{ color: "#64748b", fontSize: 14, maxWidth: 380, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
                     You need to be verified on-chain before accessing patient records.
                   </p>
                 </div>
+
               ) : loadingNfts ? (
-                <div style={styles.centerBox}>
-                  <Spinner color="#06b6d4" size={28} />
-                  <span style={{ color: "#64748b", fontSize: 13 }}>Fetching on-chain records…</span>
-                </div>
+                <CenterBox><Spinner color="#06b6d4" size={28} /><Muted>Fetching on-chain records…</Muted></CenterBox>
+
               ) : nftRecords.length === 0 ? (
-                <div style={styles.emptyCard}>
+                <div style={S.emptyCard}>
                   <span style={{ fontSize: 44 }}>📭</span>
                   <h3 style={{ color: "#f0f4ff", margin: "14px 0 8px", fontWeight: 700 }}>No Records Yet</h3>
                   <p style={{ color: "#64748b", fontSize: 14, maxWidth: 340, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
                     No patients have shared medical records with you yet.
                   </p>
                 </div>
+
               ) : (
                 <>
                   <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                    <button style={styles.refreshBtn} onClick={fetchDoctorNFTs}>
-                      ↻ Refresh
+                    <button style={S.refreshBtn} onClick={fetchDoctorNFTs}>
+                      {loadingNfts ? <Spinner color="#94a3b8" size={12} /> : "↻"} Refresh
                     </button>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                     {nftRecords.map((record, i) => {
-                      const patientName = patientNames[record.patient] || null;
+                      const meta          = recordMeta[record.ipfsHash];
+                      const isLoadingMeta = meta === null;   // null = in-flight
+                      const fileName      = meta?.fileName  || null;
+                      const patientName   = meta?.userName  || null;
+                      const isDecrypted   = !!decryptedUrls[record.ipfsHash];
+                      const isDecrypting  = decryptingId === record.ipfsHash;
+                      const decryptErr    = decryptErrors[record.ipfsHash];
+
                       return (
-                        <div key={i} style={{ ...styles.recordRow, opacity: record.revoked ? 0.4 : 1 }}>
-                          {/* Patient info */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
-                            <div style={styles.patientAvatar}>
-                              <span style={{ fontSize: 18 }}>👤</span>
+                        <div key={i} style={{ ...S.recordCard, opacity: record.revoked ? 0.45 : 1 }}>
+
+                          {/* ── Top row: file icon + name + token badge ── */}
+                          <div style={S.recordTop}>
+                            <div style={S.fileIconWrap}>
+                              <span style={{ fontSize: 20 }}>📄</span>
                             </div>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ color: "#e2e8f0", fontWeight: 700, fontSize: 14 }}>
-                                {patientName
-                                  ? patientName
-                                  : <span style={{ color: "#475569", fontFamily: "monospace", fontSize: 12 }}>
-                                      {record.patient?.slice(0, 14)}…{record.patient?.slice(-6)}
-                                    </span>
-                                }
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              {isLoadingMeta ? (
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <Spinner color="#475569" size={12} />
+                                  <span style={{ color: "#475569", fontSize: 13 }}>Loading metadata…</span>
+                                </div>
+                              ) : fileName ? (
+                                <div style={S.recordFileName}>{fileName}</div>
+                              ) : (
+                                <div style={{ color: "#475569", fontFamily: "monospace", fontSize: 12 }}>
+                                  {record.ipfsHash.slice(0, 24)}…
+                                </div>
+                              )}
+                              {record.revoked && (
+                                <span style={{ ...S.revokedBadge, marginTop: 4, display: "inline-block" }}>
+                                  Revoked
+                                </span>
+                              )}
+                            </div>
+                            {record.tokenId != null && (
+                              <span style={S.tokenBadge}>#{record.tokenId}</span>
+                            )}
+                          </div>
+
+                          {/* ── Meta row: patient + IPFS hash ── */}
+                          <div style={S.metaRow}>
+                            <div style={S.metaItem}>
+                              <span style={S.metaIcon}>👤</span>
+                              <div>
+                                <div style={S.metaLabel}>Patient</div>
+                                <div style={S.metaValue}>
+                                  {isLoadingMeta
+                                    ? <span style={{ color: "#334155" }}>—</span>
+                                    : patientName || (
+                                        <span style={{ fontFamily: "monospace", color: "#475569", fontSize: 11 }}>
+                                          {record.patient?.slice(0, 18)}…
+                                        </span>
+                                      )}
+                                </div>
                               </div>
-                              <div style={{ fontSize: 11, color: "#475569", fontFamily: "monospace", marginTop: 2 }}>
-                                {record.patient?.slice(0, 18)}…
+                            </div>
+
+                            <div style={S.metaItem}>
+                              <span style={S.metaIcon}>🔗</span>
+                              <div>
+                                <div style={S.metaLabel}>IPFS Hash</div>
+                                <div style={{ ...S.metaValue, fontFamily: "monospace", fontSize: 11, color: "#475569" }}>
+                                  {record.ipfsHash.slice(0, 26)}…
+                                </div>
                               </div>
                             </div>
                           </div>
 
-                          {/* IPFS + status */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
-                            {record.revoked
-                              ? <span style={styles.revokedBadge}>Revoked</span>
-                              : <span style={styles.activeBadge}>Active</span>
-                            }
-                            {record.tokenId != null && (
-                              <span style={styles.tokenBadge}>#{record.tokenId}</span>
-                            )}
-                            <a
-                              href={`https://gateway.pinata.cloud/ipfs/${record.ipfsHash}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={styles.rawLink}
-                            >
-                              IPFS ↗
-                            </a>
-                          </div>
+                          {/* ── Decrypt error ── */}
+                          {decryptErr && (
+                            <div style={S.errorBox}>
+                              <span>⚠️</span><span>{decryptErr}</span>
+                            </div>
+                          )}
+
+                          {/* ── Actions ── */}
+                          {!record.revoked && (
+                            <div style={S.recordActions}>
+                              <button
+                                style={{
+                                  ...S.decryptBtn,
+                                  opacity:     isDecrypting ? 0.6 : 1,
+                                  cursor:      isDecrypting ? "wait" : "pointer",
+                                  background:  isDecrypted ? "rgba(16,185,129,0.1)"  : "rgba(6,182,212,0.1)",
+                                  borderColor: isDecrypted ? "rgba(16,185,129,0.3)"  : "rgba(6,182,212,0.3)",
+                                  color:       isDecrypted ? "#10b981" : "#06b6d4",
+                                }}
+                                onClick={() => handleDecryptAndView(record)}
+                                disabled={isDecrypting}
+                              >
+                                {isDecrypting
+                                  ? <><Spinner color="#06b6d4" size={11} />&nbsp;Decrypting…</>
+                                  : isDecrypted ? "🔓 Open File" : "🔓 Decrypt & View"}
+                              </button>
+
+                              <a href={`https://gateway.pinata.cloud/ipfs/${record.ipfsHash}`}
+                                target="_blank" rel="noreferrer" style={S.rawLink}>
+                                IPFS ↗
+                              </a>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -301,16 +416,17 @@ export default function DoctorDashboard() {
         )}
 
       </div>
-
       <style>{`@keyframes hc-spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
 
+// ─── Sub-components ────────────────────────────────────────────────────────────
+
 function StatCard({ icon, label, value, color, locked }) {
   return (
-    <div style={{ ...styles.statCard, opacity: locked ? 0.5 : 1 }}>
-      <div style={{ ...styles.statIcon, background: `${color}12`, border: `1px solid ${color}25` }}>
+    <div style={{ ...S.statCard, opacity: locked ? 0.5 : 1 }}>
+      <div style={{ ...S.statIcon, background: `${color}12`, border: `1px solid ${color}25` }}>
         <span style={{ fontSize: 22 }}>{locked ? "🔒" : icon}</span>
       </div>
       <div style={{ fontSize: 26, fontWeight: 800, color }}>{value}</div>
@@ -321,16 +437,24 @@ function StatCard({ icon, label, value, color, locked }) {
 
 function InfoItem({ icon, label, value, mono }) {
   return (
-    <div style={styles.infoItem}>
-      <span style={styles.infoItemIcon}>{icon}</span>
+    <div style={S.infoItem}>
+      <span style={S.infoItemIcon}>{icon}</span>
       <div>
-        <div style={styles.infoItemLabel}>{label}</div>
-        <div style={{ ...styles.infoItemValue, fontFamily: mono ? "monospace" : "inherit", fontSize: mono ? 12 : 14 }}>
+        <div style={S.infoItemLabel}>{label}</div>
+        <div style={{ ...S.infoItemValue, fontFamily: mono ? "monospace" : "inherit", fontSize: mono ? 12 : 14 }}>
           {value}
         </div>
       </div>
     </div>
   );
+}
+
+function CenterBox({ children }) {
+  return <div style={S.centerBox}>{children}</div>;
+}
+
+function Muted({ children }) {
+  return <span style={{ color: "#64748b", fontSize: 13 }}>{children}</span>;
 }
 
 function Spinner({ color = "#fff", size = 14 }) {
@@ -344,147 +468,64 @@ function Spinner({ color = "#fff", size = 14 }) {
   );
 }
 
-const styles = {
-  root: {
-    minHeight: "100vh", background: "#060a12",
-    fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
-    position: "relative", overflow: "auto",
-  },
-  orb1: {
-    position: "fixed", top: "-10%", left: "-5%", width: 500, height: 500, borderRadius: "50%",
-    background: "radial-gradient(circle, rgba(6,182,212,0.09) 0%, transparent 70%)", pointerEvents: "none",
-  },
-  orb2: {
-    position: "fixed", bottom: "-10%", right: "-5%", width: 600, height: 600, borderRadius: "50%",
-    background: "radial-gradient(circle, rgba(139,92,246,0.06) 0%, transparent 70%)", pointerEvents: "none",
-  },
-  container: {
-    maxWidth: 900, margin: "0 auto", padding: "0 24px 60px", position: "relative", zIndex: 1,
-  },
-  nav: {
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    padding: "24px 0", borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 40,
-  },
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const S = {
+  root: { minHeight: "100vh", background: "#060a12", fontFamily: "'DM Sans','Segoe UI',sans-serif", position: "relative", overflow: "auto" },
+  orb1: { position: "fixed", top: "-10%", left: "-5%", width: 500, height: 500, borderRadius: "50%", background: "radial-gradient(circle,rgba(6,182,212,0.09) 0%,transparent 70%)", pointerEvents: "none", zIndex: 0 },
+  orb2: { position: "fixed", bottom: "-10%", right: "-5%", width: 600, height: 600, borderRadius: "50%", background: "radial-gradient(circle,rgba(139,92,246,0.06) 0%,transparent 70%)", pointerEvents: "none", zIndex: 0 },
+  gridBg: { position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0, backgroundImage: "linear-gradient(rgba(6,182,212,0.02) 1px,transparent 1px),linear-gradient(90deg,rgba(6,182,212,0.02) 1px,transparent 1px)", backgroundSize: "60px 60px" },
+  container: { maxWidth: 900, margin: "0 auto", padding: "0 24px 80px", position: "relative", zIndex: 1 },
+  nav: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "24px 0", borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 40 },
   logo: { fontSize: 22, fontWeight: 800, color: "#f0f4ff", letterSpacing: "-0.5px" },
   navRight: { display: "flex", alignItems: "center", gap: 10 },
-  networkBadge: {
-    background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.2)",
-    color: "#06b6d4", padding: "5px 12px", borderRadius: 100, fontSize: 12,
-  },
-  addrBadge: {
-    background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
-    color: "#94a3b8", padding: "5px 12px", borderRadius: 100, fontSize: 12, fontFamily: "monospace",
-  },
-  logoutBtn: {
-    background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
-    color: "#94a3b8", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13,
-  },
+  networkBadge: { background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.2)", color: "#06b6d4", padding: "5px 12px", borderRadius: 100, fontSize: 12 },
+  addrBadge: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8", padding: "5px 12px", borderRadius: 100, fontSize: 12, fontFamily: "monospace" },
+  logoutBtn: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13 },
   header: { display: "flex", alignItems: "center", gap: 20, marginBottom: 28 },
-  avatarWrap: {
-    width: 80, height: 80, borderRadius: 20,
-    background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.2)",
-    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-  },
+  avatarWrap: { width: 80, height: 80, borderRadius: 20, background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   welcome: { fontSize: 28, fontWeight: 800, color: "#f0f4ff", margin: "0 0 4px" },
   subtitle: { fontSize: 14, color: "#64748b", margin: 0 },
-  verifyBanner: {
-    borderRadius: 16, padding: "18px 22px", marginBottom: 28,
-    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
-  },
+  verifyBanner: { borderRadius: 16, padding: "18px 22px", marginBottom: 28, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" },
   verifyBannerLeft: { display: "flex", alignItems: "center", gap: 16 },
-  pendingBadge: {
-    background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)",
-    color: "#f59e0b", padding: "6px 14px", borderRadius: 100, fontSize: 12, fontWeight: 600,
-  },
-  verifiedBadge: {
-    background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)",
-    color: "#10b981", padding: "6px 14px", borderRadius: 100, fontSize: 12, fontWeight: 600,
-  },
+  pendingBadge: { background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", color: "#f59e0b", padding: "6px 14px", borderRadius: 100, fontSize: 12, fontWeight: 600 },
+  verifiedBadge: { background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)", color: "#10b981", padding: "6px 14px", borderRadius: 100, fontSize: 12, fontWeight: 600 },
   tabBar: { display: "flex", gap: 8, marginBottom: 28, flexWrap: "wrap" },
-  tabBtn: {
-    display: "flex", alignItems: "center", gap: 8,
-    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
-    color: "#64748b", padding: "11px 20px", borderRadius: 12, cursor: "pointer", fontSize: 14, fontWeight: 600,
-  },
-  tabBtnActive: {
-    background: "rgba(6,182,212,0.12)", border: "1px solid rgba(6,182,212,0.35)", color: "#06b6d4",
-  },
-  statsGrid: {
-    display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 16, marginBottom: 28,
-  },
-  statCard: {
-    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 10,
-    transition: "opacity 0.3s",
-  },
-  statIcon: {
-    width: 46, height: 46, borderRadius: 12,
-    display: "flex", alignItems: "center", justifyContent: "center",
-  },
-  infoCard: {
-    background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: 16, padding: "22px 24px", marginBottom: 28,
-  },
+  tabBtn: { display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "#64748b", padding: "11px 20px", borderRadius: 12, cursor: "pointer", fontSize: 14, fontWeight: 600 },
+  tabBtnActive: { background: "rgba(6,182,212,0.12)", border: "1px solid rgba(6,182,212,0.35)", color: "#06b6d4" },
+  statsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16, marginBottom: 28 },
+  statCard: { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 10 },
+  statIcon: { width: 46, height: 46, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center" },
+  infoCard: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: "22px 24px", marginBottom: 28 },
   infoCardTitle: { fontSize: 14, fontWeight: 700, color: "#94a3b8", margin: "0 0 16px", textTransform: "uppercase", letterSpacing: "0.06em" },
-  infoGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 },
+  infoGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 16 },
   infoItem: { display: "flex", alignItems: "flex-start", gap: 12 },
   infoItemIcon: { fontSize: 18, marginTop: 2 },
   infoItemLabel: { fontSize: 11, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 },
   infoItemValue: { color: "#e2e8f0" },
-  lockedCard: {
-    background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: 20, padding: "48px 32px",
-    display: "flex", flexDirection: "column", alignItems: "center",
-  },
-  // Panel (for Patient Records tab)
-  panel: {
-    background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: 20, overflow: "hidden",
-  },
+  lockedCard: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 20, padding: "48px 32px", display: "flex", flexDirection: "column", alignItems: "center" },
+  panel: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 20, overflow: "hidden" },
   panelHeader: { padding: "24px 28px 18px", borderBottom: "1px solid rgba(255,255,255,0.05)" },
   panelTitle:    { fontSize: 18, fontWeight: 800, color: "#f0f4ff", margin: "0 0 4px" },
   panelSubtitle: { fontSize: 13, color: "#64748b", margin: 0, lineHeight: 1.6 },
   panelBody:     { padding: "22px 28px", display: "flex", flexDirection: "column", gap: 14 },
-  centerBox: {
-    display: "flex", flexDirection: "column", alignItems: "center",
-    justifyContent: "center", gap: 12, padding: 32,
-  },
-  emptyCard: {
-    display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 32px", gap: 8,
-  },
-  recordRow: {
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: 12, padding: "14px 16px", gap: 12, flexWrap: "wrap",
-  },
-  patientAvatar: {
-    width: 42, height: 42, borderRadius: 12, flexShrink: 0,
-    background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.2)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-  },
-  activeBadge: {
-    display: "inline-block",
-    background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)",
-    color: "#10b981", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600,
-  },
-  revokedBadge: {
-    display: "inline-block",
-    background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)",
-    color: "#f87171", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600,
-  },
-  tokenBadge: {
-    background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.25)",
-    color: "#8b5cf6", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600,
-  },
-  rawLink: {
-    color: "#475569", fontSize: 12, textDecoration: "none", fontWeight: 600,
-    padding: "4px 10px", borderRadius: 6,
-    background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)",
-  },
-  refreshBtn: {
-    display: "flex", alignItems: "center", gap: 6,
-    background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
-    color: "#64748b", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12,
-  },
+  centerBox: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 32 },
+  emptyCard: { display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 32px", gap: 8 },
+  // ── Record card ──
+  recordCard: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 },
+  recordTop: { display: "flex", alignItems: "center", gap: 12 },
+  fileIconWrap: { width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.18)", display: "flex", alignItems: "center", justifyContent: "center" },
+  recordFileName: { color: "#e2e8f0", fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  metaRow: { display: "flex", flexWrap: "wrap", gap: 20, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.05)" },
+  metaItem: { display: "flex", alignItems: "flex-start", gap: 8 },
+  metaIcon: { fontSize: 15, marginTop: 1 },
+  metaLabel: { fontSize: 10, color: "#475569", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 },
+  metaValue: { fontSize: 13, color: "#94a3b8" },
+  recordActions: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingTop: 4 },
+  decryptBtn: { display: "flex", alignItems: "center", gap: 6, border: "1px solid", padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600 },
+  rawLink: { color: "#475569", fontSize: 12, textDecoration: "none", fontWeight: 600, padding: "6px 12px", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" },
+  errorBox: { background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "10px 14px", color: "#fca5a5", fontSize: 13, display: "flex", gap: 8, alignItems: "center" },
+  tokenBadge: { background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.25)", color: "#8b5cf6", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600, flexShrink: 0 },
+  revokedBadge: { background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#f87171", padding: "2px 8px", borderRadius: 100, fontSize: 11, fontWeight: 600 },
+  refreshBtn: { display: "flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", color: "#64748b", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12 },
 };
