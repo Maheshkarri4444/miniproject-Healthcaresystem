@@ -65,7 +65,7 @@ export default function DoctorDashboard() {
 
   // ─── Fetch NFTs when tab becomes active ───────────────────────────────────
   useEffect(() => {
-    if (activeTab === "patients" && verified && address) fetchDoctorNFTs();
+ fetchDoctorNFTs();
   }, [activeTab, verified, address]);
 
   // ─── Fetch single record metadata from DB by ipfsHash ─────────────────────
