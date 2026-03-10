@@ -343,7 +343,7 @@ const handleDecryptDocs = async () => {
                     >
                       {decrypting
                         ? <BtnInner icon={<Spinner color="#06b6d4" size={12} />} text={decryptStep || "Decrypting..."} />
-                        : <BtnInner icon="🔓" text="Sign to Decrypt & View" />
+                        : <BtnInner icon="🔓" text="Decrypt & View" />
                       }
                     </button>
                   </div>
@@ -353,7 +353,7 @@ const handleDecryptDocs = async () => {
                     <div style={styles.decryptNotice}>
                       <span style={{ fontSize: 16 }}>🔐</span>
                       <span style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
-                        Documents are encrypted. Click <strong style={{ color: "#06b6d4" }}>Sign to Decrypt & View</strong> — MetaMask will ask you to sign a message (no gas, no transaction) to authorize decryption. Your key never leaves the browser.
+                        Documents are encrypted. Click <strong style={{ color: "#06b6d4" }}>Decrypt & View</strong> — MetaMask will ask you to sign a message (no gas, no transaction) to authorize decryption. Your key never leaves the browser.
                       </span>
                     </div>
                   )}
