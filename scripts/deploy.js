@@ -2,13 +2,14 @@ const { ethers } = require("hardhat");
 
 async function main() {
   console.log("Deploying contracts...");
-  const registryAddress = "0xAdb09eC2d071296f847DdbDC4abFae55A1Cbc911";
+  const Registry = await ethers.getContractFactory("DoctorRegistry");
+  const registry = await Registry.deploy();
+  await registry.waitForDeployment();
 
-  // const Registry = await ethers.getContractFactory("DoctorRegistry");
-  // const registry = await Registry.deploy();
-  // await registry.waitForDeployment();
 
-  // console.log("DoctorRegistry deployed to:", await registry.getAddress());
+  const registryAddress = await registry.getAddress();
+
+  console.log("DoctorRegistry deployed to:", await registry.getAddress());
 
   const NFT = await ethers.getContractFactory("MedicalAccessNFT");
   const nft = await NFT.deploy(registryAddress);
@@ -26,9 +27,9 @@ async function main() {
   console.log("HealthcareManager deployed to:", await manager.getAddress());
 }
 
-// DoctorRegistry deployed to: 0xAdb09eC2d071296f847DdbDC4abFae55A1Cbc911
-// MedicalAccessNFT deployed to: 0x85F624F492f7965af3542a9858247e7612319b05
-// HealthcareManager deployed to: 0xEEe28039DcC01b4672a3eCadA9BccBe31372bb4E
+// DoctorRegistry deployed to: 0x1596754054B7a730C7828c748c75fa137517451d
+// MedicalAccessNFT deployed to: 0xe9fa980e25F3eAAB78406FDEf90B1C3CA44c3CD6
+// HealthcareManager deployed to: 0x19038058bF30aeCdE2e5f4C1611818eB37e99aeb
 
 main().catch((error) => {
   console.error(error);

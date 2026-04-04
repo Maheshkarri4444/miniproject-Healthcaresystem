@@ -4,6 +4,7 @@ import { getContract, connectWalletWithPubKey } from "../utils/contract";
 import { encryptFileForAdmin } from "../utils/crypto";
 import { PrivateKey } from "eciesjs";
 import { keccak256, getBytes, hexlify } from "ethers";
+import { getMetaMaskProvider} from "../utils/contract";
 
 const API = "http://localhost:5010/api";
 const ADMIN_PUBLIC_KEY = import.meta.env.VITE_ADMIN_DERIVED_PUBKEY;
@@ -63,7 +64,8 @@ function uint8ToBase64(bytes) {
 
   /* DERIVE ECIES PUBLIC KEY */
   const derivePublicKey = async (address) => {
-    const signature = await window.ethereum.request({
+    const provider = await getMetaMaskProvider();
+    const signature = await provider.request({
       method: "eth_signTypedData_v4",
       params: [address, JSON.stringify(TYPED_DATA)],
     });

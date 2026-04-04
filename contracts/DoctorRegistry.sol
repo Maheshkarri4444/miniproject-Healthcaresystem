@@ -7,12 +7,14 @@ contract DoctorRegistry {
     struct Doctor {
         bool isRegistered;
         bool isVerified;
+        bool isSuspended;
         string[] certificateIPFSHashes;
     }
 
     struct DoctorInfo {
         address doctorAddress;
         bool isVerified;
+        bool isSuspended;
     }
 
     mapping(address => Doctor) public doctors;
@@ -35,6 +37,7 @@ contract DoctorRegistry {
         doctors[msg.sender] = Doctor({
             isRegistered: true,
             isVerified: false,
+            isSuspended: false,
             certificateIPFSHashes: _ipfsHashes
         });
 
@@ -53,7 +56,7 @@ contract DoctorRegistry {
     }
 
     function isDoctorVerified(address _doctor) external view returns (bool) {
-        return doctors[_doctor].isVerified;
+        return doctors[_doctor].isVerified && !doctors[_doctor].isSuspended;
     }
 
     // Function to return all doctors with verification status
@@ -66,7 +69,8 @@ contract DoctorRegistry {
 
             doctorInfos[i] = DoctorInfo({
                 doctorAddress: doctorAddr,
-                isVerified: doctors[doctorAddr].isVerified
+                isVerified: doctors[doctorAddr].isVerified,
+                isSuspended: doctors[doctorAddr].isSuspended
             });
         }
 
@@ -76,5 +80,19 @@ contract DoctorRegistry {
     // Optional helper function to get total number of doctors
     function getDoctorCount() external view returns (uint256) {
         return doctorList.length;
+    }
+
+    function suspendDoctor(address _doctor) external onlyAdmin {
+        require(doctors[_doctor].isRegistered, "Doctor not registered");
+        require(!doctors[_doctor].isSuspended, "Already suspended");
+
+        doctors[_doctor].isSuspended = true;
+    }
+
+    function unsuspendDoctor(address _doctor) external onlyAdmin {
+        require(doctors[_doctor].isRegistered, "Doctor not registered");
+        require(doctors[_doctor].isSuspended, "Not suspended");
+
+        doctors[_doctor].isSuspended = false;
     }
 }
