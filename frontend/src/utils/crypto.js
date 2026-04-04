@@ -2,7 +2,7 @@ import { encrypt, decrypt } from "eciesjs";
 import { getBytes, hexlify, keccak256 } from "ethers";
 import { recoverAddress,  toUtf8Bytes } from "ethers";
 // ✅ Must be byte-for-byte identical to GenerateAdminKeys.jsx
-
+import { getMetaMaskProvider} from "./contract";
 const TYPED_DATA = {
   domain: {
     name: "HealthChain",
@@ -21,22 +21,28 @@ const TYPED_DATA = {
   },
 };
 export async function getAdminDecryptionKey() {
-  if (!window.ethereum) throw new Error("MetaMask not installed.");
+  const metamaskProvider = getMetaMaskProvider();
+
+  if (!metamaskProvider || !metamaskProvider.isMetaMask) {
+    throw new Error("MetaMask not installed or not selected.");
+  }
+
   await checkAndSwitchToSepolia();
 
-  const accounts = await window.ethereum.request({
+  // Request account from SAME provider
+  const accounts = await metamaskProvider.request({
     method: "eth_requestAccounts",
   });
 
   const address = accounts[0];
 
-  // 🔥 EXACT SAME SIGNING METHOD AS GENERATOR
-  const signature = await window.ethereum.request({
+  // ✅ Use SAME provider for signing (FIXED)
+  const signature = await metamaskProvider.request({
     method: "eth_signTypedData_v4",
     params: [address, JSON.stringify(TYPED_DATA)],
   });
 
-  // 🔥 EXACT SAME HASHING METHOD
+  // Deterministic key derivation
   const decryptionKey = keccak256(getBytes(signature));
 
   return decryptionKey;

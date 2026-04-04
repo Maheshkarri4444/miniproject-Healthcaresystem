@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { connectWalletWithPubKey } from "../utils/contract";
 import { PrivateKey } from "eciesjs";
 import { keccak256, getBytes, hexlify } from "ethers";
+import { getMetaMaskProvider} from "../utils/contract";
 
 const API = "http://localhost:5010/api";
 
@@ -39,7 +40,8 @@ export default function UserRegister() {
 
   /* DERIVE ECIES PUBLIC KEY */
   const derivePublicKey = async (address) => {
-    const signature = await window.ethereum.request({
+    const provider = await getMetaMaskProvider();
+    const signature = await provider.request({
       method: "eth_signTypedData_v4",
       params: [address, JSON.stringify(TYPED_DATA)],
     });

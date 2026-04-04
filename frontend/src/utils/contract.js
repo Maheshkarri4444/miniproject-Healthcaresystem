@@ -12,11 +12,9 @@ export const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase();
 
 
 export const checkAndSwitchToSepolia = async () => {
-  if (!window.ethereum) {
-    throw new Error("MetaMask not installed");
-  }
+  const metamaskProvider = getMetaMaskProvider();
 
-  const chainId = await window.ethereum.request({ method: "eth_chainId" });
+  const chainId = await metamaskProvider.request({ method: "eth_chainId" });
 
   if (chainId !== SEPOLIA_CHAIN_ID) {
     try {
@@ -62,7 +60,8 @@ export const connectWallet = async () => {
 
 export const getContract = async () => {
   await checkAndSwitchToSepolia();
-  const provider = new ethers.BrowserProvider(window.ethereum);
+  const metamaskProvider = getMetaMaskProvider();
+  const provider = new ethers.BrowserProvider(metamaskProvider);
   const signer = await provider.getSigner();
 
   return new ethers.Contract(CONTRACT_ADDRESS, DoctorRegistryABI, signer);
@@ -70,20 +69,35 @@ export const getContract = async () => {
 
 export const getMedicalContract = async () => {
   await checkAndSwitchToSepolia();
-  const provider = new ethers.BrowserProvider(window.ethereum);
+  const metamaskProvider = getMetaMaskProvider();
+  const provider = new ethers.BrowserProvider(metamaskProvider);
   const signer = await provider.getSigner();
 
   return new ethers.Contract(MEDICAL_CONTRACT_ADDRESS, MedicalRecordABI, signer);
 };
 
+export const getMetaMaskProvider = () => {
+  if (window.ethereum?.providers) {
+    return window.ethereum.providers.find(p => p.isMetaMask);
+  }
+  return window.ethereum;
+};
+
 export async function connectWalletWithPubKey() {
-  if (!window.ethereum) {
-    throw new Error("MetaMask not installed. Please install MetaMask to continue.");
+
+  if (!window.ethereum.isMetaMask) {
+    throw new Error("Please use MetaMask. Other wallets are not supported.");
   }
 
   await checkAndSwitchToSepolia();
 
-  const provider = new ethers.BrowserProvider(window.ethereum);
+  const metamaskProvider = getMetaMaskProvider();
+
+  if (!metamaskProvider || !metamaskProvider.isMetaMask) {
+    throw new Error("MetaMask is required.");
+  }
+
+  const provider = new ethers.BrowserProvider(metamaskProvider);
   await provider.send("eth_requestAccounts", []);
 
   const signer = await provider.getSigner();
@@ -96,6 +110,8 @@ export async function connectWalletWithPubKey() {
   const publicKeyUncompressed = ethers.SigningKey.recoverPublicKey(messageHash, signature);
   const publicKeyCompressed = ethers.SigningKey.computePublicKey(publicKeyUncompressed, true);
 
+  console.log("Connected address:", address);
+  console.log("Derived public key:", publicKeyCompressed);  
   return { address, publicKey: publicKeyCompressed };
 }
 

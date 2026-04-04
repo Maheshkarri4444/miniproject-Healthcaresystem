@@ -21,7 +21,7 @@ app.use("/api/users",    userRoutes);
 app.use("/api/doctors",  doctorRoutes);
 app.use("/api/ipfs",     ipfsRoutes);
 app.use("/api/records",  medicalRoutes);
-app.use("/api/requests", requestRoutes); // ← NEW
+app.use("/api/requests", requestRoutes);
 
 const PORT = process.env.PORT || 5010;
 

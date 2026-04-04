@@ -52,9 +52,7 @@ export default function DoctorDashboard() {
   const [sentRequests,     setSentRequests]     = useState([]);
   const [showDropdown,     setShowDropdown]     = useState(false);
   const searchRef = useRef(null);
-
-    const recordsRef = useRef(null);
-
+  const recordsRef = useRef(null);
 
   useEffect(() => {
     if (!address) return;
@@ -64,7 +62,7 @@ export default function DoctorDashboard() {
   }, [address]);
 
   useEffect(() => {
-    if (activeTab === "patients" && verified && address) fetchDoctorNFTs();
+    fetchDoctorNFTs();
   }, [activeTab, verified, address]);
 
   useEffect(() => {
@@ -87,7 +85,6 @@ export default function DoctorDashboard() {
     } catch (e) { console.error("fetchAllUsers:", e); }
   };
 
-  // ── FIX 1: use wallet address, not pubkey ─────────────────────────────────
   const fetchSentRequests = async () => {
     if (!address) return;
     try {
@@ -124,7 +121,6 @@ export default function DoctorDashboard() {
     setLoadingNfts(false);
   }, [address, fetchRecordMeta]);
 
-  // ── FIX 2: use DB records instead of contract call (contract is patient-only) ──
   const fetchUserRecords = async (user) => {
     setLoadingUserRec(true);
     setUserRecords([]);
@@ -133,13 +129,11 @@ export default function DoctorDashboard() {
       if (!res.ok) throw new Error("Failed to fetch records");
       const allRecords = await res.json();
 
-      // Match by userPubKey stored during justStore
       const userPubKey = user.pubkey || user.walletAddress;
       const matched = allRecords.filter(
         r => r.userPubKey?.toLowerCase() === userPubKey?.toLowerCase()
       );
 
-      // Deduplicate by fileName
       const seen    = new Set();
       const deduped = [];
       for (const rec of matched) {
@@ -166,11 +160,9 @@ export default function DoctorDashboard() {
     setRequestSuccess({});
     setRequestError({});
     fetchUserRecords(user);
-
-    // 🔥 ADD THIS
-  setTimeout(() => {
-    recordsRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, 200);
+    setTimeout(() => {
+      recordsRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 200);
   };
 
   const handleRequestRecord = async (record) => {
@@ -185,7 +177,7 @@ export default function DoctorDashboard() {
         userPubkey:          selectedUser.pubkey,
         userDerivedPubkey:   selectedUser.derivedpubkey,
         doctorName:          doctor.name,
-        doctorPubkey:        address,           // ← wallet address
+        doctorPubkey:        address,
         doctorDerivedPubkey: doctor.derivedpubkey || "",
         recordName:          record.fileName || record.ipfsHash,
         recordTokenId:       record.tokenId  ?? null,
@@ -234,6 +226,31 @@ export default function DoctorDashboard() {
       r.userPubkey === selectedUser?.pubkey &&
       r.status === "pending"
     );
+
+  // ── NEW: check if doctor already has this record in their nftRecords ─────
+  // Match by fileName (from recordMeta) AND patient wallet address
+  const alreadyHaveRecord = (record) => {
+    if (!selectedUser || nftRecords.length === 0) return false;
+    const recordFileName = record.fileName?.trim().toLowerCase();
+    return nftRecords.some(nft => {
+      // must belong to this patient
+      const patientMatch =
+        nft.patient?.toLowerCase() === selectedUser.walletAddress?.toLowerCase() ||
+        nft.patient?.toLowerCase() === selectedUser.pubkey?.toLowerCase();
+      if (!patientMatch) return false;
+      // must not be revoked
+      if (nft.revoked) return false;
+      // match by fileName via recordMeta
+      if (recordFileName) {
+        const meta = recordMeta[nft.ipfsHash];
+        const nftFileName = meta?.fileName?.trim().toLowerCase();
+        if (nftFileName && nftFileName === recordFileName) return true;
+      }
+      // fallback: match by ipfsHash directly
+      if (nft.ipfsHash === record.ipfsHash) return true;
+      return false;
+    });
+  };
 
   return (
     <div style={S.root}>
@@ -356,13 +373,6 @@ export default function DoctorDashboard() {
                                 <div style={S.metaValue}>{isLoadingMeta ? "—" : meta?.userName || <span style={{ fontFamily: "monospace", color: "#475569", fontSize: 11 }}>{record.patient?.slice(0,18)}…</span>}</div>
                               </div>
                             </div>
-                            <div style={S.metaItem}>
-                              <span style={S.metaIcon}>🔗</span>
-                              <div>
-                                <div style={S.metaLabel}>IPFS Hash</div>
-                                <div style={{ ...S.metaValue, fontFamily: "monospace", fontSize: 11, color: "#475569" }}>{record.ipfsHash.slice(0,26)}…</div>
-                              </div>
-                            </div>
                           </div>
                           {decryptErr && <div style={S.errorBox}><span>⚠️</span><span>{decryptErr}</span></div>}
                           {!record.revoked && (
@@ -370,7 +380,6 @@ export default function DoctorDashboard() {
                               <button style={{ ...S.decryptBtn, opacity: isDecrypting ? 0.6 : 1, cursor: isDecrypting ? "wait" : "pointer", background: isDecrypted ? "rgba(16,185,129,0.1)" : "rgba(6,182,212,0.1)", borderColor: isDecrypted ? "rgba(16,185,129,0.3)" : "rgba(6,182,212,0.3)", color: isDecrypted ? "#10b981" : "#06b6d4" }} onClick={() => handleDecryptAndView(record)} disabled={isDecrypting}>
                                 {isDecrypting ? <><Spinner color="#06b6d4" size={11} />&nbsp;Decrypting…</> : isDecrypted ? "🔓 Open File" : "🔓 Decrypt & View"}
                               </button>
-                              <a href={`https://gateway.pinata.cloud/ipfs/${record.ipfsHash}`} target="_blank" rel="noreferrer" style={S.rawLink}>IPFS ↗</a>
                             </div>
                           )}
                         </div>
@@ -452,10 +461,11 @@ export default function DoctorDashboard() {
                           <span style={{ color: "#64748b", fontSize: 13 }}>{selectedUser.name} has no stored records yet.</span>
                         </div>
                       ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: 1, maxHeight: "400px", overflowY: "auto" }}>
                           {userRecords.map((rec, i) => {
                             const displayName  = rec.fileName || rec.ipfsHash.slice(0,20) + "…";
-                            const isPending    = alreadyRequested(rec);
+                            const alreadyHave  = alreadyHaveRecord(rec);   // ← NEW
+                            const isPending    = !alreadyHave && alreadyRequested(rec);
                             const isRequesting = requestingRecord === rec.ipfsHash;
                             const wasJustSent  = requestSuccess[rec.ipfsHash];
                             const reqErr       = requestError[rec.ipfsHash];
@@ -470,13 +480,18 @@ export default function DoctorDashboard() {
                                 </div>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                                   {rec.tokenId != null && <span style={S.tokenBadge}>#{rec.tokenId}</span>}
-                                  {wasJustSent ? <span style={S.sentBadge}>✓ Request Sent</span>
-                                    : isPending ? <span style={S.pendingReqBadge}>⏳ Pending</span>
-                                    : (
-                                      <button style={{ ...S.requestBtn, opacity: isRequesting ? 0.6 : 1, cursor: isRequesting ? "wait" : "pointer" }} onClick={() => handleRequestRecord(rec)} disabled={isRequesting}>
-                                        {isRequesting ? <><Spinner color="#000" size={11} />&nbsp;Sending…</> : "📨 Request Record"}
-                                      </button>
-                                    )}
+                                  {/* ── NEW: already have badge takes top priority ── */}
+                                  {alreadyHave ? (
+                                    <span style={S.alreadyHaveBadge}>✓ Already Have It</span>
+                                  ) : wasJustSent ? (
+                                    <span style={S.sentBadge}>✓ Request Sent</span>
+                                  ) : isPending ? (
+                                    <span style={S.pendingReqBadge}>⏳ Pending</span>
+                                  ) : (
+                                    <button style={{ ...S.requestBtn, opacity: isRequesting ? 0.6 : 1, cursor: isRequesting ? "wait" : "pointer" }} onClick={() => handleRequestRecord(rec)} disabled={isRequesting}>
+                                      {isRequesting ? <><Spinner color="#000" size={11} />&nbsp;Sending…</> : "📨 Request Record"}
+                                    </button>
+                                  )}
                                 </div>
                                 {reqErr && <div style={{ width: "100%", marginTop: 4 }}><div style={{ ...S.errorBox, padding: "8px 12px" }}><span>⚠️</span><span style={{ fontSize: 12 }}>{reqErr}</span></div></div>}
                               </div>
@@ -588,7 +603,7 @@ const S = {
   panelHeader: { padding: "24px 28px 18px", borderBottom: "1px solid rgba(255,255,255,0.05)" },
   panelTitle: { fontSize: 18, fontWeight: 800, color: "#f0f4ff", margin: "0 0 4px" },
   panelSubtitle: { fontSize: 13, color: "#64748b", margin: 0, lineHeight: 1.6 },
-  panelBody: { padding: "22px 28px", display: "flex", flexDirection: "column", gap: 16 },
+  panelBody: { padding: "22px 28px", display: "flex", flexDirection: "column", gap: 16, minHeight: "400px" },
   centerBox: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 32 },
   emptyCard: { display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 32px", gap: 8 },
   emptyNote: { display: "flex", alignItems: "center", gap: 12, padding: "16px", background: "rgba(255,255,255,0.02)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)" },
@@ -613,7 +628,7 @@ const S = {
   inputWrap: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.04)", border: "1px solid", borderRadius: 12, padding: "12px 14px" },
   input: { background: "none", border: "none", outline: "none", color: "#f0f4ff", fontSize: 14, width: "100%" },
   clearBtn: { background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 14, padding: "0 2px", flexShrink: 0 },
-  dropdown: { position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "#0d1117", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, zIndex: 50, overflow: "hidden", boxShadow: "0 20px 40px rgba(0,0,0,0.6)" },
+  dropdown: { position: "absolute", maxHeight: "250px", overflowY: "auto", top: "calc(100% + 6px)", left: 0, right: 0, background: "#0d1117", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, zIndex: 50, overflow: "hidden", boxShadow: "0 20px 40px rgba(0,0,0,0.6)" },
   dropdownItem: { display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.04)" },
   dropdownAvatar: { width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.15)", display: "flex", alignItems: "center", justifyContent: "center" },
   selectedUserPill: { display: "flex", alignItems: "center", gap: 14, background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.2)", borderRadius: 14, padding: "14px 16px" },
@@ -626,5 +641,7 @@ const S = {
   requestBtn: { display: "flex", alignItems: "center", gap: 6, background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "#000", padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 700 },
   sentBadge: { background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", color: "#10b981", padding: "5px 12px", borderRadius: 100, fontSize: 12, fontWeight: 600 },
   pendingReqBadge: { background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", color: "#f59e0b", padding: "5px 12px", borderRadius: 100, fontSize: 12, fontWeight: 600 },
+  // ── NEW badge style ──────────────────────────────────────────────────────
+  alreadyHaveBadge: { background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.3)", color: "#06b6d4", padding: "5px 12px", borderRadius: 100, fontSize: 12, fontWeight: 600 },
   searchPlaceholder: { display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 32px", gap: 8 },
 };

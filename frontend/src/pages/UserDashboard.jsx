@@ -8,7 +8,7 @@ import { getBytes, hexlify } from "ethers";
 const API = "http://localhost:5010/api";
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 
-// ─── Crypto helpers ───────────────────────────────────────────────────────────
+// ─── Crypto helpers ────────────────────────────────────────────────────────────
 
 function uint8ToBase64(bytes) {
   let b = "";
@@ -47,7 +47,7 @@ async function reencryptAesKeyForDoctor(encUserAesKeyHex, userPrivKeyHex, doctor
   return hexlify(encrypt(getBytes(doctorDerivedPubKey), rawAesKey));
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function UserDashboard() {
   const navigate  = useNavigate();
@@ -59,7 +59,7 @@ export default function UserDashboard() {
   const [activeTab, setActiveTab] = useState("store");
 
   // Doctors
-  const [doctors, setDoctors]         = useState([]);
+  const [doctors, setDoctors]               = useState([]);
   const [loadingDoctors, setLoadingDoctors] = useState(false);
 
   // ── Store tab
@@ -86,13 +86,18 @@ export default function UserDashboard() {
   const [decryptedUrls, setDecryptedUrls]                 = useState({});
   const [decryptErrors, setDecryptErrors]                 = useState({});
 
-  // ── Self-stored records fetched from blockchain (used in Share tab + Store name-conflict check)
-  const [selfStored, setSelfStored]           = useState([]);
+  // ── Self-stored records
+  const [selfStored, setSelfStored]               = useState([]);
   const [loadingSelfStored, setLoadingSelfStored] = useState(false);
 
-  // ─── Helpers to fetch from DB by ipfsHash for name enrichment ─────────────
+  // ── Record Requests tab
+  const [recordRequests, setRecordRequests]   = useState([]);
+  const [loadingRequests, setLoadingRequests] = useState(false);
+  // per-request approval state: { [requestId]: { step, error, success, loading } }
+  const [approvalState, setApprovalState]     = useState({});
 
-  // Returns a map of { ipfsHash -> { fileName, tokenId, userDerivedPubKey } } from ALL /records
+  // ─── DB helpers ───────────────────────────────────────────────────────────
+
   const fetchDbRecordsMap = async () => {
     try {
       const r = await fetch(`${API}/records`);
@@ -104,10 +109,7 @@ export default function UserDashboard() {
     } catch { return {}; }
   };
 
-  // ─── fetchSelfStored: blockchain → filter isSelfStored → enrich with DB names ──
-  //     This is the single source of truth for:
-  //       1. What shows in the Share-with-Doctor document list
-  //       2. Which names are already used (for Store tab conflict check)
+  // ─── fetchSelfStored ──────────────────────────────────────────────────────
   const fetchSelfStored = useCallback(async () => {
     if (!address) return;
     setLoadingSelfStored(true);
@@ -122,7 +124,6 @@ export default function UserDashboard() {
           const db = dbMap[r.ipfsHash];
           return {
             ipfsHash:          r.ipfsHash,
-            // Use DB fileName if available; otherwise just show the raw ipfsHash as the label
             fileName:          db?.fileName || r.ipfsHash,
             tokenId:           db?.tokenId  ?? null,
             userDerivedPubKey: db?.userDerivedPubKey || null,
@@ -134,7 +135,7 @@ export default function UserDashboard() {
     setLoadingSelfStored(false);
   }, [address]);
 
-  // ─── fetchPatientRecords: all records for "My Files" tab ──────────────────
+  // ─── fetchPatientRecords ──────────────────────────────────────────────────
   const fetchPatientRecords = useCallback(async () => {
     if (!address) return;
     setLoadingPatientRecords(true);
@@ -166,7 +167,7 @@ export default function UserDashboard() {
     setLoadingPatientRecords(false);
   }, [address, doctors]);
 
-  // ─── fetchDoctors ─────────────────────────────────────────────────────────
+  // ─── fetchDoctors ──────────────────────────────────────────────────────────
   const fetchDoctors = useCallback(async () => {
     setLoadingDoctors(true);
     try {
@@ -182,38 +183,59 @@ export default function UserDashboard() {
     setLoadingDoctors(false);
   }, []);
 
-  // ─── Mount: load doctors + self-stored (both needed immediately) ──────────
+  // ─── fetchRecordRequests ───────────────────────────────────────────────────
+  const fetchRecordRequests = useCallback(async () => {
+    if (!publicKey && !address) return;
+    setLoadingRequests(true);
+    try {
+      const res  = await fetch(`${API}/requests/user/${publicKey || address}`);
+      if (!res.ok) { setRecordRequests([]); setLoadingRequests(false); return; }
+      const data = await res.json();
+      setRecordRequests(Array.isArray(data) ? data : []);
+    } catch (e) { console.error("fetchRecordRequests:", e); setRecordRequests([]); }
+    setLoadingRequests(false);
+  }, [address, publicKey]);
+
+  // ─── Mount ────────────────────────────────────────────────────────────────
   useEffect(() => {
     fetchDoctors();
-    fetchSelfStored();   // needed on mount for the Store-tab name-conflict check
+    fetchSelfStored();
   }, [fetchDoctors, fetchSelfStored]);
+
+  // Fetch patient records once doctors are loaded (needed for isAlreadySharedWith)
+  useEffect(() => {
+    if (doctors.length > 0) fetchPatientRecords();
+  }, [doctors]);
 
   // ─── Tab switch side-effects ──────────────────────────────────────────────
   useEffect(() => {
-    if (activeTab === "upload") fetchSelfStored();
-    if (activeTab === "view")   fetchPatientRecords();
+    if (activeTab === "upload")   fetchSelfStored();
+    if (activeTab === "view")     fetchPatientRecords();
+    if (activeTab === "requests") {
+      fetchRecordRequests();
+      fetchSelfStored();
+      fetchPatientRecords();
+    }
   }, [activeTab]);
 
-  // ─── Derived: names already used (for Store tab) ─────────────────────────
-  // Only count records that have a real fileName (not the raw hash fallback)
+  // ─── Derived: names already used ──────────────────────────────────────────
   const usedFileNames = new Set(
     selfStored
-      .filter(r => r.fileName !== r.ipfsHash)   // only named records
+      .filter(r => r.fileName !== r.ipfsHash)
       .map(r => r.fileName.trim().toLowerCase())
   );
   const labelConflict = storeLabel.trim().length > 0
     && usedFileNames.has(storeLabel.trim().toLowerCase());
 
-  // ─── Derived: group self-stored by fileName for Share tab ─────────────────
-  // Records with no DB name (fileName === ipfsHash) each get their own "group"
+  // ─── Derived: group self-stored by fileName ───────────────────────────────
   const groupedSelfStored = selfStored.reduce((acc, r) => {
-    const key = r.fileName; // either a real name or the raw ipfsHash
+    const key = r.fileName;
     if (!acc[key]) acc[key] = [];
     acc[key].push(r);
     return acc;
   }, {});
 
-  // ─── Derived: group all patient records by fileName for My Files tab ──────
+  // ─── Derived: group all patient records by fileName ───────────────────────
   const groupedPatientRecords = patientRecords.reduce((acc, r) => {
     const k = r.fileName;
     if (!acc[k]) acc[k] = [];
@@ -221,7 +243,79 @@ export default function UserDashboard() {
     return acc;
   }, {});
 
-  // ─── STORE handler ────────────────────────────────────────────────────────
+  // ─── Helper: is a record already shared with a specific doctor? ───────────
+  const isAlreadySharedWith = (recordName, doctorWalletAddress) => {
+    return patientRecords.some(r =>
+      !r.isSelfStored &&
+      !r.revoked &&
+      r.fileName?.trim().toLowerCase() === recordName?.trim().toLowerCase() &&
+      r.doctor?.toLowerCase() === doctorWalletAddress?.toLowerCase()
+    );
+  };
+
+  // ─── Core share logic (reused by Share tab + Request approval) ────────────
+  const performShare = async ({ sourceRecord, doctorWalletAddress, doctorDerivedPubKey, doctorName, onStep }) => {
+    onStep("Deriving your decryption keys (sign in MetaMask)…");
+    const { privateKey: userPrivKey } = await deriveUserKeypair(address);
+
+    onStep("Fetching encrypted bundle from IPFS…");
+    const ipfsRes = await fetch(`https://gateway.pinata.cloud/ipfs/${sourceRecord.ipfsHash}`);
+    if (!ipfsRes.ok) throw new Error("IPFS fetch failed");
+    const bundle = JSON.parse(await ipfsRes.text());
+    if (!bundle.user_encAesKey) throw new Error("Bundle is missing user_encAesKey.");
+
+    onStep("Re-encrypting AES key for doctor…");
+    if (!doctorDerivedPubKey) throw new Error("Doctor's derived public key not found.");
+    const doctor_encAesKey = await reencryptAesKeyForDoctor(
+      bundle.user_encAesKey, userPrivKey, doctorDerivedPubKey
+    );
+
+    const newBundle = JSON.stringify({
+      encrypted_file:   bundle.encrypted_file,
+      user_encAesKey:   bundle.user_encAesKey,
+      doctor_encAesKey,
+      mimeType:         bundle.mimeType,
+      originalName:     bundle.originalName,
+    });
+
+    onStep("Uploading shared bundle to IPFS…");
+    const fd = new FormData();
+    fd.append("file", new Blob([newBundle], { type: "application/json" }), `shared.enc.json`);
+    const uploadRes = await fetch(`${API}/ipfs/upload`, { method: "POST", body: fd });
+    if (!uploadRes.ok) throw new Error("IPFS upload failed");
+    const { cid } = await uploadRes.json();
+
+    onStep("Minting access NFT (approve in MetaMask)…");
+    const contract = await getMedicalContract();
+    const tx       = await contract.mintAccessNFT(address, doctorWalletAddress, cid);
+    const receipt  = await tx.wait();
+
+    let tokenId = null;
+    for (const log of receipt.logs ?? []) {
+      try {
+        const p = contract.interface.parseLog(log);
+        if (p?.name === "Transfer") { tokenId = Number(p.args.tokenId); break; }
+      } catch {}
+    }
+
+    onStep("Saving metadata to database…");
+    await fetch(`${API}/records`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tokenId,
+        fileName:          sourceRecord.fileName,
+        ipfsHash:          cid,
+        userPubKey:        publicKey,
+        userDerivedPubKey: sourceRecord.userDerivedPubKey || user?.derivedpubkey || "",
+        userName:          user?.name || "Unknown",
+      }),
+    });
+
+    return { tokenId, doctorName };
+  };
+
+  // ─── STORE handler ─────────────────────────────────────────────────────────
   const handleStore = async () => {
     if (!storeFile || !storeLabel.trim() || labelConflict) return;
     setStoring(true); setStoreError(""); setStoreSuccess("");
@@ -270,9 +364,7 @@ export default function UserDashboard() {
         }),
       });
 
-      // Re-fetch so the new name is immediately blocked in this tab
       await fetchSelfStored();
-
       setStoreSuccess(`"${storeLabel.trim()}" stored! Token #${tokenId}`);
       setStoreFile(null); setStoreLabel(""); setStoreStep("");
     } catch (e) {
@@ -283,70 +375,22 @@ export default function UserDashboard() {
     setStoring(false);
   };
 
-  // ─── SHARE handler ────────────────────────────────────────────────────────
+  // ─── SHARE handler (Share tab) ─────────────────────────────────────────────
   const handleUpload = async () => {
     if (!selectedRecord || !selectedDoctor) return;
     setUploading(true); setUploadError(""); setUploadSuccess("");
     try {
-      setUploadStep("Sign in MetaMask to derive your decryption keys…");
-      const { privateKey: userPrivKey } = await deriveUserKeypair(address);
-
-      setUploadStep("Fetching encrypted bundle from IPFS…");
-      const ipfsRes = await fetch(`https://gateway.pinata.cloud/ipfs/${selectedRecord.ipfsHash}`);
-      if (!ipfsRes.ok) throw new Error("IPFS fetch failed");
-      const bundle = JSON.parse(await ipfsRes.text());
-      if (!bundle.user_encAesKey) throw new Error("Bundle is missing user_encAesKey.");
-
-      setUploadStep("Re-encrypting AES key for doctor…");
-      if (!selectedDoctor.derivedpubkey) throw new Error("Doctor's derived public key not found.");
-      const doctor_encAesKey = await reencryptAesKeyForDoctor(
-        bundle.user_encAesKey, userPrivKey, selectedDoctor.derivedpubkey
-      );
-
-      const newBundle = JSON.stringify({
-        encrypted_file:   bundle.encrypted_file,
-        user_encAesKey:   bundle.user_encAesKey,
-        doctor_encAesKey,
-        mimeType:         bundle.mimeType,
-        originalName:     bundle.originalName,
+      await performShare({
+        sourceRecord:        selectedRecord,
+        doctorWalletAddress: selectedDoctor.walletAddress,
+        doctorDerivedPubKey: selectedDoctor.derivedpubkey,
+        doctorName:          selectedDoctor.name,
+        onStep:              setUploadStep,
       });
-
-      setUploadStep("Uploading shared bundle to IPFS…");
-      const fd = new FormData();
-      fd.append("file", new Blob([newBundle], { type: "application/json" }), `shared.enc.json`);
-      const uploadRes = await fetch(`${API}/ipfs/upload`, { method: "POST", body: fd });
-      if (!uploadRes.ok) throw new Error("IPFS upload failed");
-      const { cid } = await uploadRes.json();
-
-      setUploadStep("Minting access NFT (approve in MetaMask)…");
-      const contract = await getMedicalContract();
-      const tx       = await contract.mintAccessNFT(address, selectedDoctor.walletAddress, cid);
-      const receipt  = await tx.wait();
-
-      let tokenId = null;
-      for (const log of receipt.logs ?? []) {
-        try {
-          const p = contract.interface.parseLog(log);
-          if (p?.name === "Transfer") { tokenId = Number(p.args.tokenId); break; }
-        } catch {}
-      }
-
-      setUploadStep("Saving metadata to database…");
-      await fetch(`${API}/records`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tokenId,
-          fileName:          selectedRecord.fileName,
-          ipfsHash:          cid,
-          userPubKey:        publicKey,
-          userDerivedPubKey: selectedRecord.userDerivedPubKey || user?.derivedpubkey || "",
-          userName:          user?.name || "Unknown",
-        }),
-      });
-
       setUploadSuccess(`"${selectedRecord.fileName}" shared with Dr. ${selectedDoctor.name}!`);
       setSelectedRecord(null); setSelectedDoctor(null); setUploadStep("");
+      await fetchSelfStored();
+      await fetchPatientRecords();
     } catch (e) {
       console.error(e);
       setUploadError(e.message || "Upload failed. Please try again.");
@@ -355,7 +399,65 @@ export default function UserDashboard() {
     setUploading(false);
   };
 
-  // ─── REVOKE handler ───────────────────────────────────────────────────────
+  // ─── APPROVE REQUEST handler ───────────────────────────────────────────────
+  const handleApproveRequest = async (req) => {
+    const reqId = req._id;
+
+    // Find the self-stored record matching the requested recordName
+    const sourceRecord = selfStored.find(
+      r => r.fileName?.trim().toLowerCase() === req.recordName?.trim().toLowerCase()
+    );
+    if (!sourceRecord) {
+      setApprovalState(prev => ({
+        ...prev,
+        [reqId]: { loading: false, step: "", error: `Could not find stored record "${req.recordName}". Make sure it is stored on-chain.`, success: null },
+      }));
+      return;
+    }
+
+    // Find the doctor to get derivedpubkey
+    const doctor = doctors.find(
+      d => d.walletAddress?.toLowerCase() === req.doctorPubkey?.toLowerCase()
+    );
+    const doctorDerivedPubKey = doctor?.derivedpubkey || req.doctorDerivedPubkey || null;
+
+    setApprovalState(prev => ({ ...prev, [reqId]: { loading: true, step: "", error: null, success: null } }));
+
+    try {
+      await performShare({
+        sourceRecord,
+        doctorWalletAddress: req.doctorPubkey,
+        doctorDerivedPubKey,
+        doctorName:          req.doctorName,
+        onStep: (step) => setApprovalState(prev => ({ ...prev, [reqId]: { ...prev[reqId], step } })),
+      });
+
+      // Mark request as approved in backend
+      await fetch(`${API}/requests/${reqId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "approved" }),
+      });
+
+      setApprovalState(prev => ({
+        ...prev,
+        [reqId]: { loading: false, step: "", error: null, success: `Shared with Dr. ${req.doctorName}!` },
+      }));
+
+      // Refresh so My Files and badges update
+      await fetchSelfStored();
+      await fetchPatientRecords();
+      await fetchRecordRequests();
+    } catch (e) {
+      console.error("Approve error:", e);
+      setApprovalState(prev => ({
+        ...prev,
+        [reqId]: { loading: false, step: "", error: e.message || "Approval failed.", success: null },
+      }));
+    }
+  };
+
+  // ─── REVOKE handler ────────────────────────────────────────────────────────
   const handleRevoke = async (tokenId) => {
     if (tokenId == null) return;
     setRevoking(tokenId);
@@ -368,7 +470,7 @@ export default function UserDashboard() {
     setRevoking(null);
   };
 
-  // ─── DECRYPT & VIEW handler ───────────────────────────────────────────────
+  // ─── DECRYPT & VIEW handler ────────────────────────────────────────────────
   const handleDecryptAndView = async (record) => {
     const key = record.ipfsHash;
     if (decryptedUrls[key]) { window.open(decryptedUrls[key].url, "_blank"); return; }
@@ -394,7 +496,10 @@ export default function UserDashboard() {
     setDecryptingId(null);
   };
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // ─── Derived: pending request count for tab badge ─────────────────────────
+  const pendingCount = recordRequests.filter(r => r.status === "pending").length;
+
+  // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <div style={S.root}>
       <div style={S.orb1} /><div style={S.orb2} /><div style={S.gridBg} />
@@ -422,15 +527,20 @@ export default function UserDashboard() {
         {/* Tabs */}
         <div style={S.tabBar}>
           {[
-            { key: "store",  icon: "🗃️", label: "Store Document"    },
-            { key: "upload", icon: "📤", label: "Share with Doctor" },
-            { key: "view",   icon: "📂", label: "My Files"          },
+            { key: "store",    icon: "🗃️", label: "Store Document"    },
+            { key: "upload",   icon: "📤", label: "Share with Doctor" },
+            { key: "view",     icon: "📂", label: "My Files"          },
+            { key: "requests", icon: "📨", label: "Record Requests"   },
           ].map(t => (
             <button key={t.key}
               style={{ ...S.tabBtn, ...(activeTab === t.key ? S.tabBtnActive : {}) }}
               onClick={() => setActiveTab(t.key)}
             >
-              <span style={{ fontSize: 18 }}>{t.icon}</span><span>{t.label}</span>
+              <span style={{ fontSize: 18 }}>{t.icon}</span>
+              <span>{t.label}</span>
+              {t.key === "requests" && pendingCount > 0 && (
+                <span style={S.tabBadge}>{pendingCount}</span>
+              )}
             </button>
           ))}
         </div>
@@ -452,7 +562,6 @@ export default function UserDashboard() {
                   disabled={storing}
                 />
               </div>
-              {/* Show conflict error inline under the input */}
               {labelConflict && (
                 <span style={{ fontSize: 12, color: "#f87171", marginTop: 2 }}>
                   ⚠️ You already have a document named "{storeLabel.trim()}". Choose a different name.
@@ -462,9 +571,9 @@ export default function UserDashboard() {
 
             <FileDropZone file={storeFile} onChange={setStoreFile} disabled={storing} color="#8b5cf6" />
 
-            {storing    && storeStep  && <StepBanner step={storeStep} color="#8b5cf6" />}
-            {storeError               && <ErrorBox msg={storeError} />}
-            {storeSuccess             && <SuccessBox msg={storeSuccess} />}
+            {storing    && storeStep && <StepBanner step={storeStep} color="#8b5cf6" />}
+            {storeError             && <ErrorBox msg={storeError} />}
+            {storeSuccess           && <SuccessBox msg={storeSuccess} />}
 
             <button
               style={{ ...S.actionBtn, background: "linear-gradient(135deg,#8b5cf6,#6d28d9)",
@@ -488,30 +597,29 @@ export default function UserDashboard() {
         {/* ══════════ SHARE TAB ══════════ */}
         {activeTab === "upload" && (
           <Panel title="Share with a Doctor"
-            subtitle="Pick one of your stored documents and a verified doctor. Only the AES key is re-encrypted for the doctor.">
+            subtitle="Pick one of your stored documents first, then choose a verified doctor to share it with.">
 
-            <SectionLabel>Your Stored Documents</SectionLabel>
+            {/* STEP 1 — Select a document */}
+            <div style={S.stepHeader}>
+              <div style={S.stepCircle}>1</div>
+              <SectionLabel>Select a Document</SectionLabel>
+            </div>
 
             {loadingSelfStored ? (
               <CenterBox><Spinner color="#06b6d4" size={22} /><Muted>Loading from blockchain…</Muted></CenterBox>
             ) : Object.keys(groupedSelfStored).length === 0 ? (
               <EmptyNote icon="📭" text="No stored documents found on-chain. Store a file first." />
             ) : (
-              /* Each key is either a real fileName or a raw ipfsHash (no DB match).
-                 If a key is a real name and has multiple entries, they are shown grouped.
-                 The user clicks a sub-row to select the specific ipfsHash to share. */
               <div style={S.selectGrid}>
                 {Object.entries(groupedSelfStored).map(([groupName, entries]) => {
-                  const isRawHash    = groupName === entries[0].ipfsHash; // no DB name found
+                  const isRawHash     = groupName === entries[0].ipfsHash;
                   const groupSelected = entries.some(e => e.ipfsHash === selectedRecord?.ipfsHash);
-
                   return (
                     <div key={groupName} style={{
                       ...S.groupCard,
                       borderColor: groupSelected ? "#06b6d4" : "rgba(255,255,255,0.07)",
                       background:  groupSelected ? "rgba(6,182,212,0.05)" : "rgba(255,255,255,0.02)",
                     }}>
-                      {/* Group header: show real name or truncated hash */}
                       <div style={S.groupCardHeader}>
                         <span style={{ fontSize: 18 }}>📄</span>
                         <div style={{ flex: 1, overflow: "hidden" }}>
@@ -525,8 +633,6 @@ export default function UserDashboard() {
                           )}
                         </div>
                       </div>
-
-                      {/* Sub-rows: one per ipfsHash — click to select which one to share */}
                       <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
                         {entries.map(entry => {
                           const isSel = selectedRecord?.ipfsHash === entry.ipfsHash;
@@ -536,7 +642,11 @@ export default function UserDashboard() {
                                 borderColor: isSel ? "#06b6d4" : "rgba(255,255,255,0.05)",
                                 background:  isSel ? "rgba(6,182,212,0.1)" : "rgba(255,255,255,0.02)",
                                 cursor: "pointer" }}
-                              onClick={() => setSelectedRecord(isSel ? null : entry)}
+                              onClick={() => {
+                                setSelectedRecord(isSel ? null : entry);
+                                setSelectedDoctor(null);
+                                setUploadError(""); setUploadSuccess("");
+                              }}
                             >
                               <span style={{ fontSize: 12, fontFamily: "monospace", color: "#475569", flex: 1 }}>
                                 {entry.ipfsHash.slice(0, 24)}…
@@ -552,29 +662,57 @@ export default function UserDashboard() {
               </div>
             )}
 
-            <SectionLabel>Select a Verified Doctor</SectionLabel>
+            {/* STEP 2 — Select a doctor: only visible after a record is picked */}
+            {selectedRecord && (
+              <>
+                <div style={{ ...S.stepHeader, marginTop: 4 }}>
+                  <div style={S.stepCircle}>2</div>
+                  <SectionLabel>Select a Doctor</SectionLabel>
+                </div>
 
-            {loadingDoctors ? (
-              <CenterBox><Spinner color="#8b5cf6" size={22} /><Muted>Loading doctors…</Muted></CenterBox>
-            ) : doctors.filter(d => d.onChainVerified).length === 0 ? (
-              <EmptyNote icon="🩺" text="No verified doctors found." />
-            ) : (
-              <div style={S.selectGrid}>
-                {doctors.filter(d => d.onChainVerified).map(doc => (
-                  <SelectCard key={doc._id}
-                    selected={selectedDoctor?._id === doc._id}
-                    onClick={() => setSelectedDoctor(selectedDoctor?._id === doc._id ? null : doc)}
-                    color="#8b5cf6">
-                    <span style={{ fontSize: 20 }}>🩺</span>
-                    <div style={{ flex: 1, overflow: "hidden" }}>
-                      <div style={S.cardName}>{doc.name}</div>
-                      <div style={S.cardMono}>{doc.email}</div>
-                    </div>
-                    <StatusPill verified small />
-                    {selectedDoctor?._id === doc._id && <span style={{ color: "#8b5cf6", fontSize: 18 }}>✓</span>}
-                  </SelectCard>
-                ))}
-              </div>
+                {loadingDoctors ? (
+                  <CenterBox><Spinner color="#8b5cf6" size={22} /><Muted>Loading doctors…</Muted></CenterBox>
+                ) : doctors.filter(d => d.onChainVerified).length === 0 ? (
+                  <EmptyNote icon="🩺" text="No verified doctors found." />
+                ) : (
+                  <div style={S.selectGrid}>
+                    {doctors.filter(d => d.onChainVerified).map(doc => {
+                      const alreadyShared = isAlreadySharedWith(selectedRecord.fileName, doc.walletAddress);
+                      const isSelected    = selectedDoctor?._id === doc._id;
+                      return (
+                        <div key={doc._id}
+                          style={{
+                            ...S.selectCard,
+                            borderColor: alreadyShared ? "rgba(16,185,129,0.35)"
+                                       : isSelected    ? "#8b5cf6"
+                                       : "rgba(255,255,255,0.07)",
+                            background:  alreadyShared ? "rgba(16,185,129,0.05)"
+                                       : isSelected    ? "rgba(139,92,246,0.12)"
+                                       : "rgba(255,255,255,0.02)",
+                            cursor:  alreadyShared ? "default" : "pointer",
+                            opacity: alreadyShared ? 0.72 : 1,
+                          }}
+                          onClick={() => { if (!alreadyShared) setSelectedDoctor(isSelected ? null : doc); }}
+                        >
+                          <span style={{ fontSize: 20 }}>🩺</span>
+                          <div style={{ flex: 1, overflow: "hidden" }}>
+                            <div style={S.cardName}>{doc.name}</div>
+                            <div style={S.cardMono}>{doc.email}</div>
+                          </div>
+                          {alreadyShared ? (
+                            <span style={S.alreadySharedBadge}>✓ Already Shared</span>
+                          ) : (
+                            <>
+                              <StatusPill verified small />
+                              {isSelected && <span style={{ color: "#8b5cf6", fontSize: 18 }}>✓</span>}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
 
             {(selectedRecord || selectedDoctor) && (
@@ -685,8 +823,6 @@ export default function UserDashboard() {
                                   {decryptErr && <span style={{ color: "#f87171", fontSize: 11 }}>⚠️ {decryptErr}</span>}
                                 </>
                               )}
-                              <a href={`https://gateway.pinata.cloud/ipfs/${entry.ipfsHash}`}
-                                target="_blank" rel="noreferrer" style={S.rawLink}>IPFS ↗</a>
                               {!entry.isSelfStored && !entry.revoked && entry.tokenId != null && (
                                 <button style={{ ...S.revokeBtn, opacity: revoking === entry.tokenId ? 0.5 : 1 }}
                                   onClick={() => handleRevoke(entry.tokenId)}
@@ -703,6 +839,101 @@ export default function UserDashboard() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </Panel>
+        )}
+
+        {/* ══════════ RECORD REQUESTS TAB ══════════ */}
+        {activeTab === "requests" && (
+          <Panel title="Record Requests"
+            subtitle="Doctors who have requested access to your records. Approve to securely share the file with them.">
+
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button style={S.refreshBtn} onClick={() => { fetchRecordRequests(); fetchPatientRecords(); fetchSelfStored(); }}>
+                {loadingRequests ? <Spinner color="#94a3b8" size={12} /> : "↻"} Refresh
+              </button>
+            </div>
+
+            {loadingRequests ? (
+              <CenterBox><Spinner color="#8b5cf6" size={28} /><Muted>Loading requests…</Muted></CenterBox>
+            ) : recordRequests.length === 0 ? (
+              <div style={S.emptyCard}>
+                <span style={{ fontSize: 44 }}>📭</span>
+                <h3 style={{ color: "#f0f4ff", margin: "14px 0 8px", fontWeight: 700 }}>No Requests Yet</h3>
+                <p style={{ color: "#64748b", fontSize: 14, maxWidth: 340, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
+                  When a doctor requests access to one of your records, it will appear here.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {recordRequests.map(req => {
+                  const reqId         = req._id;
+                  const aState        = approvalState[reqId] || {};
+                  const alreadyShared = isAlreadySharedWith(req.recordName, req.doctorPubkey);
+                  const isApproved    = req.status === "approved" || alreadyShared || !!aState.success;
+                  const isRejected    = req.status === "rejected";
+                  const isPending     = !isApproved && !isRejected;
+
+                  return (
+                    <div key={reqId} style={{
+                      ...S.requestCard,
+                      borderColor: isApproved ? "rgba(16,185,129,0.25)"
+                                 : isRejected ? "rgba(239,68,68,0.2)"
+                                 : "rgba(255,255,255,0.07)",
+                      background:  isApproved ? "rgba(16,185,129,0.04)"
+                                 : isRejected ? "rgba(239,68,68,0.03)"
+                                 : "rgba(255,255,255,0.02)",
+                    }}>
+
+                      {/* Top row */}
+                      <div style={S.requestCardTop}>
+                        <div style={S.reqFileIcon}>
+                          <span style={{ fontSize: 20 }}>📄</span>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ color: "#e2e8f0", fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {req.recordName}
+                          </div>
+                          <div style={{ color: "#64748b", fontSize: 12, marginTop: 3 }}>
+                            Requested by{" "}
+                            <strong style={{ color: "#94a3b8" }}>Dr. {req.doctorName}</strong>
+                            <span style={{ color: "#334155" }}> · {new Date(req.createdAt).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                        {/* Status badge */}
+                        {isApproved && <span style={S.approvedBadge}>✓ Shared</span>}
+                        {isRejected && <span style={S.rejectedBadge}>✕ Rejected</span>}
+                        {isPending  && <span style={S.pendingReqBadge}>⏳ Pending</span>}
+                      </div>
+
+                      {/* Progress / feedback */}
+                      {aState.step    && !aState.success && <StepBanner step={aState.step} color="#8b5cf6" />}
+                      {aState.error   && <ErrorBox msg={aState.error} />}
+                      {aState.success && <SuccessBox msg={aState.success} />}
+
+                      {/* Approve button — only for pending requests not yet loading */}
+                      {isPending && !aState.loading && !aState.success && (
+                        <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+                          <button
+                            style={{ ...S.approveBtn }}
+                            onClick={() => handleApproveRequest(req)}
+                          >
+                            <BtnInner icon="🔓" text="Approve & Encrypt" />
+                          </button>
+                        </div>
+                      )}
+
+                      {/* While processing */}
+                      {aState.loading && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <Spinner color="#8b5cf6" size={13} />
+                          <span style={{ color: "#64748b", fontSize: 13 }}>{aState.step || "Processing…"}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Panel>
@@ -840,7 +1071,7 @@ function BtnInner({ icon, text }) {
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// ─── Styles ────────────────────────────────────────────────────────────────────
 
 const S = {
   root: { minHeight: "100vh", background: "#060a12", fontFamily: "'DM Sans','Segoe UI',sans-serif", position: "relative", overflow: "auto" },
@@ -861,12 +1092,15 @@ const S = {
   tabBar: { display: "flex", gap: 8, marginBottom: 28, flexWrap: "wrap" },
   tabBtn: { display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "#64748b", padding: "11px 20px", borderRadius: 12, cursor: "pointer", fontSize: 14, fontWeight: 600 },
   tabBtnActive: { background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.35)", color: "#8b5cf6" },
+  tabBadge: { background: "#ef4444", color: "#fff", fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 100, lineHeight: "16px", minWidth: 16, textAlign: "center" },
   panel: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 20, overflow: "hidden" },
   panelHeader: { padding: "24px 28px 18px", borderBottom: "1px solid rgba(255,255,255,0.05)" },
   panelTitle:    { fontSize: 18, fontWeight: 800, color: "#f0f4ff", margin: "0 0 4px" },
   panelSubtitle: { fontSize: 13, color: "#64748b", margin: 0, lineHeight: 1.6 },
   panelBody:     { padding: "22px 28px", display: "flex", flexDirection: "column", gap: 14 },
   sectionLabel: { fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em" },
+  stepHeader: { display: "flex", alignItems: "center", gap: 10 },
+  stepCircle: { width: 24, height: 24, borderRadius: "50%", background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#8b5cf6", fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   fieldGroup: { display: "flex", flexDirection: "column", gap: 6 },
   fieldLabel:  { fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" },
   inputWrap: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.04)", border: "1px solid", borderRadius: 12, padding: "12px 14px" },
@@ -899,4 +1133,13 @@ const S = {
   rawLink: { color: "#475569", fontSize: 12, textDecoration: "none", fontWeight: 600, padding: "4px 10px", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" },
   revokeBtn: { display: "flex", alignItems: "center", gap: 5, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "5px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600 },
   refreshBtn: { display: "flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", color: "#64748b", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12 },
+  // ── Record Requests tab ────────────────────────────────────────────────────
+  requestCard:    { border: "1px solid", borderRadius: 14, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 },
+  requestCardTop: { display: "flex", alignItems: "center", gap: 12 },
+  reqFileIcon:    { width: 42, height: 42, borderRadius: 10, flexShrink: 0, background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.18)", display: "flex", alignItems: "center", justifyContent: "center" },
+  approveBtn:     { display: "flex", alignItems: "center", gap: 6, background: "linear-gradient(135deg,#8b5cf6,#6d28d9)", border: "none", color: "#fff", padding: "8px 18px", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: "pointer" },
+  approvedBadge:   { background: "rgba(16,185,129,0.1)",  border: "1px solid rgba(16,185,129,0.3)",  color: "#10b981", padding: "4px 12px", borderRadius: 100, fontSize: 12, fontWeight: 600, flexShrink: 0 },
+  rejectedBadge:   { background: "rgba(239,68,68,0.1)",   border: "1px solid rgba(239,68,68,0.2)",   color: "#f87171", padding: "4px 12px", borderRadius: 100, fontSize: 12, fontWeight: 600, flexShrink: 0 },
+  pendingReqBadge: { background: "rgba(245,158,11,0.1)",  border: "1px solid rgba(245,158,11,0.25)", color: "#f59e0b", padding: "4px 12px", borderRadius: 100, fontSize: 12, fontWeight: 600, flexShrink: 0 },
+  alreadySharedBadge: { background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", color: "#10b981", padding: "3px 10px", borderRadius: 100, fontSize: 11, fontWeight: 600, flexShrink: 0 },
 };

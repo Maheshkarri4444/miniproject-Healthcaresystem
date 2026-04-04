@@ -1,6 +1,6 @@
 import { PrivateKey } from "eciesjs";
 import { keccak256, getBytes, hexlify } from "ethers";
-
+import { getMetaMaskProvider} from "./contract";
 const TYPED_DATA = {
   domain: {
     name: "HealthChain",
@@ -20,7 +20,8 @@ const TYPED_DATA = {
 };
 
 export async function deriveUserKeypair(address) {
-  const signature = await window.ethereum.request({
+  const metamaskProvider = getMetaMaskProvider();
+  const signature = await metamaskProvider.request({
     method: "eth_signTypedData_v4",
     params: [address, JSON.stringify(TYPED_DATA)],
   });

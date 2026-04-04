@@ -18,17 +18,6 @@ const createRequest = async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check for duplicate pending request
-    const existing = await Request.findOne({
-      userPubkey,
-      doctorPubkey,
-      recordName,
-      status: "pending",
-    });
-    if (existing) {
-      return res.status(409).json({ error: "A pending request for this record already exists." });
-    }
-
     const request = await Request.create({
       userName, userEmail, userPubkey, userDerivedPubkey,
       doctorName, doctorPubkey, doctorDerivedPubkey,
