@@ -2,11 +2,19 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import os
 import joblib
+from fastapi.middleware.cors import CORSMiddleware
 
 # import your ML logic
 from exp import predict_disease, ENV_MAPPINGS, MODELS_DIR, train_and_save_models
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # allow all (for dev)
+    allow_credentials=True,
+    allow_methods=["*"],  # allow POST, OPTIONS, etc
+    allow_headers=["*"],
+)
 
 # -------------------------------
 # Model Files
