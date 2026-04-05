@@ -7,6 +7,7 @@ import UserDashboard from "./pages/UserDashboard";
 import UserRegister from "./pages/UserRegister";
 import AdminPanel from "./pages/AdminPanel";
 import { GenerateAdminKeys } from "./components/GenerateAdminKeys";
+import AIPredictionPage from "./pages/AIPredictionPage";
 
 function App() {
   return (

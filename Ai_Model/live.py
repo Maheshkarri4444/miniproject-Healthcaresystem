@@ -4,10 +4,10 @@ import datetime
 from pymongo import MongoClient
 
 # --- MongoDB Connection ---
-MONGO_URI = "mongodb://localhost:27017/"
+MONGO_URI = "mongodb+srv://maheshkarri2109_db_user:VYwJ5I9M7SbXrtfO@cluster0.l9mwhbx.mongodb.net/?appName=Cluster0"
 client = MongoClient(MONGO_URI)
 db = client["local_db"]
-user_collection = db["users"]
+user_collection = db["ai_users"]
 prediction_collection = db["predictions"]
 
 # --- Session State ---
