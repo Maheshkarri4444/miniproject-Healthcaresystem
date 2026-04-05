@@ -20,6 +20,7 @@ function App() {
         <Route path="/user/dashboard" element={<UserDashboard />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="/genkeys" element={<GenerateAdminKeys />} />
+        <Route path="/ai-prediction" element={<AIPredictionPage />} />
       </Routes>
     </BrowserRouter>
   );

@@ -469,6 +469,20 @@ export default function DoctorDashboard() {
               )}
             </button>
           ))}
+          {/* AI Prediction — external link button */}
+          <button
+            style={{
+              display: "flex", alignItems: "center", gap: 8,
+              background: "linear-gradient(135deg,rgba(6,182,212,0.15),rgba(139,92,246,0.10))",
+              border: "1px solid rgba(6,182,212,0.38)", color: "#67e8f9",
+              padding: "11px 20px", borderRadius: 12, cursor: "pointer",
+              fontSize: 14, fontWeight: 700, fontFamily: "inherit", marginLeft: "auto",
+            }}
+            onClick={() => navigate("/ai-prediction", { state: { address, user: doctor, publicKey: address } })}
+          >
+            <span style={{ fontSize: 16 }}>🧬</span>
+            <span>AI Prediction</span>
+          </button>
         </div>
 
         {/* ── OVERVIEW ── */}
